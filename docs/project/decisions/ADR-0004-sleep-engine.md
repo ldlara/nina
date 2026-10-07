@@ -1,0 +1,2 @@
+# ADR-0004 — Motor de previsão de sono (MVP)
+Status: proposta. Regras: tabela de wake windows e nº de sonecas por idade (corrigida quando aplicável) como baseline; ajuste por mediana ponderada do histórico recente; confiança por volume/variância de dados; fallback ao baseline no cold start. Implementação em biblioteca .NET pura; clientes exibem previsão do servidor e podem calcular baseline offline. Linguagem sempre probabilística (RNF-014). Tabelas de referência exigem validação de especialista.
