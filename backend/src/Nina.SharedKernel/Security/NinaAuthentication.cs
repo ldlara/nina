@@ -41,6 +41,7 @@ public static class NinaAuthentication
             });
 
         services.AddAuthorization();
+        services.AddHostedService<SessionValidatorStartupCheck>();
         return services;
     }
 
@@ -60,8 +61,17 @@ public static class NinaAuthentication
         }
 
         var allowRevoked = ctx.HttpContext.GetEndpoint()?.Metadata.GetMetadata<AllowRevokedSessionAttribute>() is not null;
+        // NR-17: falha FECHADO. Sem ISessionValidator a revogação de sessão não valeria; recusa o token (e a subida
+        // da aplicação é barrada por SessionValidatorStartupCheck) em vez de aceitar silenciosamente.
         var validator = ctx.HttpContext.RequestServices.GetService<ISessionValidator>();
-        if (validator is null || allowRevoked)
+        if (validator is null)
+        {
+            ctx.HttpContext.Items[FailureCodeKey] = "INVALID_TOKEN";
+            ctx.Fail("no session validator registered");
+            return;
+        }
+
+        if (allowRevoked)
         {
             return;
         }
@@ -90,4 +100,15 @@ public static class NinaAuthentication
             : $"Bearer error=\"invalid_token\"";
         await ProblemWriter.WriteAsync(ctx.HttpContext, ProblemException.Unauthorized(code, title));
     }
+}
+
+/// <summary>NR-17: impede a subida de um host que registrou a autenticação JWT mas esqueceu o <see cref="ISessionValidator"/>.</summary>
+internal sealed class SessionValidatorStartupCheck(IServiceProvider services) : Microsoft.Extensions.Hosting.IHostedService
+{
+    public Task StartAsync(CancellationToken cancellationToken) =>
+        services.GetService<ISessionValidator>() is null
+            ? throw new InvalidOperationException("ISessionValidator não registrado: a revogação de sessão não seria aplicada (NR-17).")
+            : Task.CompletedTask;
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

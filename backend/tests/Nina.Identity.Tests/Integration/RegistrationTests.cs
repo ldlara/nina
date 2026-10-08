@@ -185,7 +185,7 @@ public sealed class RegistrationTests(PostgresFixture postgres) : IntegrationTes
         ApiResponse? limited = null;
         for (var i = 0; i < 25 && limited is null; i++)
         {
-            var r = await Api.PostAsync("/v1/auth/register", RegisterBody(ApiClient.NewEmail()), tweak: req => req.Headers.Add("X-Forwarded-For", "198.51.100.7"));
+            var r = await Api.PostAsync("/v1/auth/register", RegisterBody(ApiClient.NewEmail()), tweak: ApiClient.FromIp("198.51.100.7"));
             last = r.Status;
             if (r.Status == HttpStatusCode.TooManyRequests)
             {

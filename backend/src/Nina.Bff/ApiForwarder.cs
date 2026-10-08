@@ -5,10 +5,15 @@ namespace Nina.Bff;
 /// <summary>
 /// Encaminha uma chamada do contrato público (BFF, único exposto) para a API interna sem regra de negócio:
 /// repassa método, caminho, corpo e cabeçalhos do contrato; devolve status, corpo e cabeçalhos da resposta.
-/// O IP do cliente (já resolvido pelo middleware de cabeçalhos encaminhados) vai em <c>X-Forwarded-For</c>.
+/// O IP do cliente (já resolvido pelo middleware de cabeçalhos encaminhados, só de proxies confiáveis) vai em cabeçalho interno
+/// autenticado por segredo compartilhado; o <c>X-Forwarded-For</c> recebido de fora nunca é repassado.
 /// </summary>
-public sealed class ApiForwarder(HttpClient http)
+public sealed class ApiForwarder(HttpClient http, Microsoft.Extensions.Options.IOptions<InternalOptions> internalOptions)
 {
+    // Mesmos nomes de Nina.SharedKernel.Http.InternalHeaders (o BFF não referencia o SharedKernel; um teste garante a igualdade).
+    public const string InternalClientIpHeader = "X-Nina-Client-Ip";
+    public const string InternalSecretHeader = "X-Nina-Internal-Secret";
+
     private const long MaxBodyBytes = 256 * 1024;
 
     private static readonly string[] RequestHeaders =
@@ -40,10 +45,12 @@ public sealed class ApiForwarder(HttpClient http)
             }
         }
 
-        if (context.Connection.RemoteIpAddress is { } ip)
+        // O X-Forwarded-For do cliente é descartado de propósito (não está em RequestHeaders). A API só confia no IP abaixo
+        // quando o segredo confere (NR-02).
+        if (context.Connection.RemoteIpAddress is { } ip && internalOptions.Value.SharedSecret is { Length: > 0 } secret)
         {
-            // O cabeçalho do cliente é descartado de propósito: a API confia no valor do BFF.
-            upstream.Headers.TryAddWithoutValidation("X-Forwarded-For", ip.ToString());
+            upstream.Headers.TryAddWithoutValidation(InternalClientIpHeader, (ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip).ToString());
+            upstream.Headers.TryAddWithoutValidation(InternalSecretHeader, secret);
         }
 
         if (request.ContentLength is > 0 || request.Headers.ContainsKey("Transfer-Encoding"))

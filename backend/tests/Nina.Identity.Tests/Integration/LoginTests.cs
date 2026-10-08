@@ -11,7 +11,7 @@ public sealed class LoginTests(PostgresFixture postgres) : IntegrationTestBase(p
         Api.PostAsync(
             "/v1/auth/login",
             new JsonObject { ["email"] = email, ["password"] = password, ["device"] = ApiClient.Device(deviceId) },
-            tweak: r => r.Headers.Add("X-Forwarded-For", ip));
+            tweak: ApiClient.FromIp(ip));
 
     [Fact]
     public async Task Login_with_valid_credentials_returns_a_session_bound_to_the_device()

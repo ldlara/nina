@@ -28,6 +28,7 @@ public sealed partial class AuthService(
     SecretKeys keys,
     AuditLog audit,
     IRequestContext request,
+    IBackgroundWork background,
     TimeProvider time,
     ILogger<AuthService> logger)
 {
@@ -461,8 +462,14 @@ public sealed partial class AuthService(
 
     // ------------------------------------------------------- recuperação de senha
 
+    // NR-12: a resposta tem custo igual para e-mail existente e inexistente: (1) o envio do e-mail sai da requisição
+    // (IBackgroundWork), (2) o ramo "sem conta" executa o mesmo hash do ramo "com conta" e (3) a duração mínima da resposta
+    // é fixa, absorvendo a diferença residual das escritas no banco.
+    private static readonly TimeSpan ForgotMinDuration = TimeSpan.FromMilliseconds(250);
+
     public async Task ForgotPasswordAsync(ForgotPasswordRequest req, CancellationToken ct)
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         Enforce(limiter.Consume($"forgot:ip:{Ip}", Limits.ForgotPerIpPerHour, TimeSpan.FromHours(1)));
         var v = new Validation();
         var email = v.Email("email", req.Email);
@@ -470,6 +477,7 @@ public sealed partial class AuthService(
         var allowed = limiter.Consume($"forgot:email:{email}", Limits.ForgotPerEmailPerHour, TimeSpan.FromHours(1)).Allowed;
 
         var token = OpaqueTokens.NewUrlToken();
+        var tokenHash = ResetHash(token);
         var now = time.GetUtcNow();
         var locale = await db.InTransactionAsync(null, async tx =>
         {
@@ -480,14 +488,21 @@ public sealed partial class AuthService(
             }
 
             await tx.SetUserAsync(user.Id);
-            await IdentityStore.InsertRecoveryAsync(tx, user.Id, ResetHash(token), now, now.AddMinutes(Opt.PasswordResetMinutes));
+            await IdentityStore.InsertRecoveryAsync(tx, user.Id, tokenHash, now, now.AddMinutes(Opt.PasswordResetMinutes));
             await audit.AppendAsync(tx, new AuditEntry("auth.password_reset_requested", user.Id, "user", user.Id));
             return user.Locale ?? Opt.DefaultLocale;
         }, ct);
 
         if (locale is not null)
         {
-            await TrySendAsync(() => mailer.SendPasswordResetAsync(email!, token, locale, ct));
+            var address = email!;
+            background.Enqueue(async workCt => await TrySendAsync(() => mailer.SendPasswordResetAsync(address, token, locale, workCt)));
+        }
+
+        var remaining = ForgotMinDuration - System.Diagnostics.Stopwatch.GetElapsedTime(started);
+        if (remaining > TimeSpan.Zero)
+        {
+            await Task.Delay(remaining, ct);
         }
     }
 

@@ -121,7 +121,7 @@ public sealed class SocialLoginTests(PostgresFixture postgres) : IntegrationTest
         ApiResponse? last = null;
         for (var i = 0; i < 40; i++)
         {
-            last = await Api.PostAsync("/v1/auth/google", new JsonObject { ["id_token"] = "garbage-token-0123456789", ["nonce"] = "nonce-0001", ["device"] = ApiClient.Device() }, tweak: r => r.Headers.Add("X-Forwarded-For", "192.0.2.50"));
+            last = await Api.PostAsync("/v1/auth/google", new JsonObject { ["id_token"] = "garbage-token-0123456789", ["nonce"] = "nonce-0001", ["device"] = ApiClient.Device() }, tweak: ApiClient.FromIp("192.0.2.50"));
         }
 
         Assert.Equal(HttpStatusCode.TooManyRequests, last!.Status);

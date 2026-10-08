@@ -5,7 +5,10 @@ namespace Nina.SharedKernel.Security;
 /// <summary><c>Count</c> = tentativas dentro da janela após esta operação (útil para escalonar bloqueios).</summary>
 public readonly record struct RateLimitDecision(bool Allowed, int RetryAfterSeconds, int Count = 0);
 
-/// <summary>Limitador de taxa por chave (SEC-040). A implementação padrão é em memória (por instância).</summary>
+/// <summary>Limitador de taxa por chave (SEC-040). A interface é a fronteira de distribuição: a implementação padrão
+/// (<see cref="InMemoryRateLimiter"/>) é por instância; para mais de uma réplica registre uma implementação com estado
+/// compartilhado (Redis ou tabela com UPSERT atômico) no lugar dela (NR-10). Contrato: implementações devem falhar fechado
+/// (na dúvida, negar), nunca descartar o estado de chaves já no limite.</summary>
 public interface IRateLimiter
 {
     /// <summary>Conta uma tentativa e informa se ainda está dentro do limite.</summary>
@@ -27,24 +30,39 @@ public interface IRateLimiter
 }
 
 /// <summary>
-/// Janela deslizante em memória. Limitação conhecida: o estado não é compartilhado entre instâncias; para escala horizontal
-/// substituir por implementação distribuída (a interface é a fronteira).
+/// Janela deslizante em memória. LIMITAÇÕES CONHECIDAS (NR-10): o estado é por instância (N réplicas = N vezes os limites) e
+/// se perde no restart; para escala horizontal substituir <see cref="IRateLimiter"/> por implementação distribuída.
+/// Memória limitada a <c>maxKeys</c> chaves, com política FAIL-CLOSED: no teto removem-se primeiro as chaves expiradas e depois
+/// as menos recentemente usadas (LRU) entre as que ainda NÃO atingiram o limite; chaves já no limite e bloqueios ativos nunca
+/// são evictados (um atacante não consegue "lavar" o próprio bloqueio enchendo a tabela). Se, mesmo assim, não houver espaço
+/// (tabela cheia de chaves em limite), chaves novas são NEGADAS em vez de admitidas.
 /// </summary>
-public sealed class InMemoryRateLimiter(TimeProvider time) : IRateLimiter
+public sealed class InMemoryRateLimiter(TimeProvider time, int maxKeys = InMemoryRateLimiter.DefaultMaxKeys) : IRateLimiter
 {
-    private const int MaxKeys = 200_000;
+    public const int DefaultMaxKeys = 200_000;
+    private const int SweepEvery = 512;
     private readonly ConcurrentDictionary<string, Bucket> _buckets = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, long> _blocks = new(StringComparer.Ordinal);
+    private readonly object _evictionLock = new();
     private int _ops;
+
+    /// <summary>Quantidade de chaves de janela retidas (observabilidade e testes).</summary>
+    public int KeyCount => _buckets.Count;
 
     public RateLimitDecision Consume(string key, int limit, TimeSpan window)
     {
-        var bucket = _buckets.GetOrAdd(key, _ => new Bucket());
         var now = time.GetUtcNow().UtcTicks;
+        if (!TryGetBucket(key, now, out var bucket))
+        {
+            return new RateLimitDecision(false, SaturatedRetryAfterSeconds(window), limit);
+        }
+
         RateLimitDecision decision;
         lock (bucket)
         {
             bucket.Window = window;
+            bucket.Limit = limit;
+            bucket.LastAccess = now;
             Prune(bucket, now, window);
             if (bucket.Hits.Count >= limit)
             {
@@ -71,6 +89,8 @@ public sealed class InMemoryRateLimiter(TimeProvider time) : IRateLimiter
         var now = time.GetUtcNow().UtcTicks;
         lock (bucket)
         {
+            bucket.LastAccess = now;
+            bucket.Limit = limit;
             Prune(bucket, now, window);
             return bucket.Hits.Count >= limit
                 ? new RateLimitDecision(false, RetryAfter(bucket, now, window))
@@ -80,11 +100,18 @@ public sealed class InMemoryRateLimiter(TimeProvider time) : IRateLimiter
 
     public void Record(string key, TimeSpan window)
     {
-        var bucket = _buckets.GetOrAdd(key, _ => new Bucket());
         var now = time.GetUtcNow().UtcTicks;
+        if (!TryGetBucket(key, now, out var bucket))
+        {
+            // Sem espaço: registrar a falha como bloqueio pela janela inteira (fail-closed).
+            Block(key, window);
+            return;
+        }
+
         lock (bucket)
         {
             bucket.Window = window;
+            bucket.LastAccess = now;
             Prune(bucket, now, window);
             bucket.Hits.Enqueue(now);
         }
@@ -133,15 +160,66 @@ public sealed class InMemoryRateLimiter(TimeProvider time) : IRateLimiter
         return Math.Max(1, (int)Math.Ceiling(remaining.TotalSeconds));
     }
 
-    // Evita crescimento ilimitado: de tempos em tempos remove chaves vazias; acima do teto descarta tudo (fail-open pontual).
-    private void Sweep()
+    private static int SaturatedRetryAfterSeconds(TimeSpan window) =>
+        Math.Max(1, (int)Math.Ceiling(Math.Min(window.TotalSeconds, 60)));
+
+    private bool TryGetBucket(string key, long now, out Bucket bucket)
     {
-        if (Interlocked.Increment(ref _ops) % 512 != 0 && _buckets.Count < MaxKeys)
+        if (_buckets.TryGetValue(key, out bucket!))
         {
-            return;
+            return true;
         }
 
-        var now = time.GetUtcNow().UtcTicks;
+        if (_buckets.Count >= maxKeys && !MakeRoom(now))
+        {
+            bucket = null!;
+            return false;
+        }
+
+        bucket = _buckets.GetOrAdd(key, _ => new Bucket { LastAccess = now });
+        return true;
+    }
+
+    // Libera espaço no teto: 1) expiradas; 2) LRU entre as que não atingiram o limite (nunca as que estão em limite).
+    private bool MakeRoom(long now)
+    {
+        lock (_evictionLock)
+        {
+            if (_buckets.Count < maxKeys)
+            {
+                return true;
+            }
+
+            RemoveExpired(now);
+            if (_buckets.Count < maxKeys)
+            {
+                return true;
+            }
+
+            var target = Math.Max(1, maxKeys / 10);
+            var candidates = new List<(string Key, long LastAccess)>();
+            foreach (var (key, bucket) in _buckets)
+            {
+                lock (bucket)
+                {
+                    if (bucket.Hits.Count < bucket.Limit)
+                    {
+                        candidates.Add((key, bucket.LastAccess));
+                    }
+                }
+            }
+
+            foreach (var (key, _) in candidates.OrderBy(c => c.LastAccess).Take(target))
+            {
+                _buckets.TryRemove(key, out _);
+            }
+
+            return _buckets.Count < maxKeys;
+        }
+    }
+
+    private void RemoveExpired(long now)
+    {
         foreach (var (key, bucket) in _buckets)
         {
             lock (bucket)
@@ -154,9 +232,26 @@ public sealed class InMemoryRateLimiter(TimeProvider time) : IRateLimiter
             }
         }
 
-        if (_buckets.Count >= MaxKeys)
+        foreach (var (key, until) in _blocks)
         {
-            _buckets.Clear();
+            if (until <= now)
+            {
+                _blocks.TryRemove(key, out _);
+            }
+        }
+    }
+
+    // Manutenção periódica: só remove o que expirou (nunca descarta estado vivo).
+    private void Sweep()
+    {
+        if (Interlocked.Increment(ref _ops) % SweepEvery != 0)
+        {
+            return;
+        }
+
+        lock (_evictionLock)
+        {
+            RemoveExpired(time.GetUtcNow().UtcTicks);
         }
     }
 
@@ -165,5 +260,9 @@ public sealed class InMemoryRateLimiter(TimeProvider time) : IRateLimiter
         public Queue<long> Hits { get; } = new();
 
         public TimeSpan Window { get; set; }
+
+        public int Limit { get; set; } = int.MaxValue;
+
+        public long LastAccess { get; set; }
     }
 }

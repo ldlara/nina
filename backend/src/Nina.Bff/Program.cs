@@ -6,6 +6,18 @@ builder.Services
     .AddOptions<ApiOptions>()
     .Bind(builder.Configuration.GetSection(ApiOptions.SectionName));
 
+builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(o =>
+    (builder.Configuration.GetSection(ForwardedHeadersSettings.SectionName).Get<ForwardedHeadersSettings>() ?? new ForwardedHeadersSettings()).Apply(o));
+
+// NR-02: segredo compartilhado com a API (autentica o IP do cliente repassado). Obrigatório fora de Development.
+builder.Services
+    .AddOptions<InternalOptions>()
+    .Bind(builder.Configuration.GetSection(InternalOptions.SectionName))
+    .Validate(
+        o => builder.Environment.IsDevelopment() && string.IsNullOrEmpty(o.SharedSecret) || o.SharedSecret is { Length: >= InternalOptions.MinSecretLength },
+        $"Internal:SharedSecret é obrigatório (mínimo {InternalOptions.MinSecretLength} caracteres) fora de Development.")
+    .ValidateOnStart();
+
 builder.Services.AddHttpClient<INinaApiClient, NinaApiClient>((sp, client) =>
 {
     var options = builder.Configuration.GetSection(ApiOptions.SectionName).Get<ApiOptions>() ?? new ApiOptions();

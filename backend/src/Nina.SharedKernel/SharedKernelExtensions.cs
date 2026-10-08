@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
@@ -39,16 +38,16 @@ public static class SharedKernelExtensions
 
         services.AddNinaJwtAuthentication(configuration);
         services.TryAddSingleton<IRateLimiter, InMemoryRateLimiter>();
+        services.TryAddSingleton<BackgroundWorkRunner>();
+        services.TryAddSingleton<IBackgroundWork>(sp => sp.GetRequiredService<BackgroundWorkRunner>());
+        services.AddHostedService(sp => sp.GetRequiredService<BackgroundWorkRunner>());
         services.TryAddScoped<IRequestContext, HttpRequestContext>();
         services.TryAddScoped<AuditLog>();
 
-        services.Configure<ForwardedHeadersOptions>(o =>
-        {
-            // A API é interna (somente o BFF a alcança, ADR-0002): confia no X-Forwarded-For enviado pelo BFF.
-            o.ForwardedHeaders = ForwardedHeaders.XForwardedFor;
-            o.KnownIPNetworks.Clear();
-            o.KnownProxies.Clear();
-        });
+        // NR-02: a API não interpreta X-Forwarded-For (qualquer um que alcance a porta o forjaria). O IP do cliente chega
+        // do BFF em cabeçalho interno autenticado por segredo compartilhado (InternalClientIpMiddleware).
+        services.AddOptions<InternalOptions>().Bind(configuration.GetSection(InternalOptions.SectionName)).ValidateOnStart();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<InternalOptions>, InternalOptionsValidator>());
 
         // Corpo máximo de 256 KiB (limite do sync push, SEC-042) em todas as rotas da API.
         services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(o =>
@@ -61,10 +60,10 @@ public static class SharedKernelExtensions
         return services;
     }
 
-    /// <summary>Pipeline comum: cabeçalhos encaminhados, correlação/erros RFC 7807, autenticação e autorização.</summary>
+    /// <summary>Pipeline comum: IP do cliente vindo do BFF (autenticado), correlação/erros RFC 7807, autenticação e autorização.</summary>
     public static IApplicationBuilder UseNinaPipeline(this IApplicationBuilder app)
     {
-        app.UseForwardedHeaders();
+        app.UseMiddleware<InternalClientIpMiddleware>();
         app.UseMiddleware<SecurityHeadersMiddleware>();
         app.UseMiddleware<ProblemDetailsMiddleware>();
         app.UseAuthentication();

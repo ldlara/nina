@@ -20,7 +20,7 @@ public sealed class HardeningTests(PostgresFixture postgres) : IntegrationTestBa
         Api.PostAsync(
             "/v1/auth/login",
             new JsonObject { ["email"] = email, ["password"] = password, ["device"] = ApiClient.Device(deviceId) },
-            tweak: r => r.Headers.Add("X-Forwarded-For", ip));
+            tweak: ApiClient.FromIp(ip));
 
     [Fact]
     public async Task Lockouts_grow_progressively_and_the_retry_after_follows()

@@ -72,7 +72,7 @@ public sealed class PlatformTests(PostgresFixture postgres) : IntegrationTestBas
         await Api.PostAsync(
             "/v1/auth/login",
             new JsonObject { ["email"] = email, ["password"] = "wrong-password-123", ["device"] = ApiClient.Device() },
-            tweak: r => r.Headers.Add("X-Forwarded-For", "203.0.113.77"));
+            tweak: ApiClient.FromIp("203.0.113.77"));
 
         async Task<long> Count(string action, string? result = null) => await AdminScalarAsync<long>(
             "SELECT count(*) FROM nina.audit_event WHERE action = @a AND (@r::text IS NULL OR result = @r)",

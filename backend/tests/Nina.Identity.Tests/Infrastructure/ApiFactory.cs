@@ -16,6 +16,8 @@ namespace Nina.Identity.Tests.Infrastructure;
 public static class TestConstants
 {
     public const string MasterKey = "dGVzdC1tYXN0ZXIta2V5LWZvci1uaW5hLWlkZW50aXR5LXRlc3RzLTEyMzQ1Ng=="; // base64, > 32 bytes
+    /// <summary>Segredo BFF -> API dos testes (<c>Internal:SharedSecret</c>, mínimo de 32 caracteres).</summary>
+    public const string InternalSecret = "test-internal-shared-secret-0123456789-abcdef";
     public const string GoodPassword = "correct-horse-battery-staple";
 
     /// <summary>Gera uma chave ECDSA P-256 (PKCS#8, PEM) para assinar JWT ES256 nos testes.</summary>
@@ -43,6 +45,7 @@ public sealed class ApiFactory(string appConnectionString, Action<Dictionary<str
             ["Jwt:SigningKeyPem"] = TestConstants.NewSigningKeyPem(),
             ["Jwt:KeyId"] = "test-key-1",
             ["Security:MasterKey"] = TestConstants.MasterKey,
+            ["Internal:SharedSecret"] = TestConstants.InternalSecret,
             ["Identity:Argon2MemoryKiB"] = "4096", // acelera os testes; o padrão de produção é 19456
             ["Identity:Argon2Iterations"] = "2",
             ["Identity:GoogleClientIds:0"] = "test-google-client",
@@ -54,6 +57,9 @@ public sealed class ApiFactory(string appConnectionString, Action<Dictionary<str
         {
             services.RemoveAll<TimeProvider>();
             services.AddSingleton<TimeProvider>(Time);
+            // Trabalho em segundo plano (e-mails) executa inline nos testes, para as asserções verem o envio de imediato.
+            services.RemoveAll<IBackgroundWork>();
+            services.AddSingleton<IBackgroundWork, InlineBackgroundWork>();
             services.RemoveAll<IIdentityTokenVerifier>();
             services.AddSingleton<IIdentityTokenVerifier, FakeIdentityTokenVerifier>();
         });
@@ -65,6 +71,12 @@ public sealed class ApiFactory(string appConnectionString, Action<Dictionary<str
         time.SetUtcNow(DateTimeOffset.UtcNow);
         return time;
     }
+}
+
+/// <summary>Executa o trabalho no ato (determinismo dos testes; produção usa a fila com workers).</summary>
+public sealed class InlineBackgroundWork : IBackgroundWork
+{
+    public void Enqueue(Func<CancellationToken, Task> work) => work(CancellationToken.None).GetAwaiter().GetResult();
 }
 
 /// <summary>Cliente HTTP de teste com atalhos para o contrato (JSON snake_case, <c>JsonNode</c> nas respostas).</summary>
@@ -85,6 +97,13 @@ public sealed class ApiClient(HttpClient http, ApiFactory factory)
         new JsonObject { ["purpose_key"] = "TERMS_OF_USE", ["document_version"] = version },
         new JsonObject { ["purpose_key"] = "PRIVACY_POLICY", ["document_version"] = version },
     ];
+
+    /// <summary>Simula o BFF: repassa o IP do cliente no cabeçalho interno autenticado pelo segredo compartilhado.</summary>
+    public static Action<HttpRequestMessage> FromIp(string ip) => r =>
+    {
+        r.Headers.Add(InternalHeaders.ClientIp, ip);
+        r.Headers.Add(InternalHeaders.Secret, TestConstants.InternalSecret);
+    };
 
     public static string NewEmail() => $"user-{Guid.NewGuid():N}@example.org";
 
