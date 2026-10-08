@@ -1250,6 +1250,36 @@ CREATE TABLE nina.outbox_message (   -- outbox transacional (ADR-0002); payload 
 CREATE INDEX outbox_pending_ix ON nina.outbox_message (available_at, id)
   WHERE processed_at IS NULL AND dead_lettered_at IS NULL;
 
+-- Catalogo de tipos de mensagem do outbox (NR-11): tipo -> agregado e chaves de payload permitidas. TODA insercao (app, worker,
+-- funcoes definer) e validada por gatilho contra o catalogo; o app ainda so insere por colunas restritas e por politica que limita os
+-- tipos "do proprio usuario" (ver secao 12). Um tipo novo exige migracao (revisao de seguranca), nunca configuracao.
+CREATE TABLE nina.outbox_event_type (
+  event_type     text PRIMARY KEY,
+  aggregate_type text NOT NULL,
+  allowed_keys   text[] NOT NULL DEFAULT ARRAY[]::text[]
+);
+
+CREATE FUNCTION nina.outbox_validate() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
+DECLARE t nina.outbox_event_type%ROWTYPE; k text;
+BEGIN
+  SELECT * INTO t FROM nina.outbox_event_type WHERE event_type = NEW.event_type;
+  IF NOT FOUND OR t.aggregate_type <> NEW.aggregate_type THEN
+    RAISE EXCEPTION 'tipo de mensagem do outbox desconhecido ou com agregado incompativel' USING ERRCODE = 'NN080';
+  END IF;
+  FOR k IN SELECT jsonb_object_keys(NEW.payload) LOOP
+    IF k <> ALL (t.allowed_keys) THEN
+      RAISE EXCEPTION 'chave de payload nao permitida para o tipo de mensagem' USING ERRCODE = 'NN080';
+    END IF;
+  END LOOP;
+  IF NEW.event_type = 'SecurityNoticeRequested'
+     AND coalesce(NEW.payload->>'notice', '') NOT IN ('NEW_DEVICE_LOGIN', 'PASSWORD_CHANGED', 'PASSWORD_RESET', 'IDENTITY_LINKED', 'EMAIL_CHANGED') THEN
+    RAISE EXCEPTION 'aviso de seguranca invalido' USING ERRCODE = 'NN080';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER outbox_message_validate BEFORE INSERT ON nina.outbox_message FOR EACH ROW EXECUTE FUNCTION nina.outbox_validate();
+
 -- -----------------------------------------------------------------------------
 -- 7. Assinaturas e entitlement por família (ADR-0005)
 -- -----------------------------------------------------------------------------
@@ -2975,7 +3005,8 @@ BEGIN
   END LOOP;
   -- tabelas sem nenhuma politica para o app (so funcoes definer / worker): RLS ligada = fail-closed
   FOREACH t IN ARRAY ARRAY['baby_sync_head', 'config_change', 'audit_event', 'schema_migration', 'guard_secret', 'audit_action',
-                           'audit_chain_checkpoint', 'erasure_ledger', 'email_verification_code', 'email_change_request', 'reauth_jti'] LOOP
+                           'audit_chain_checkpoint', 'erasure_ledger', 'email_verification_code', 'email_change_request', 'reauth_jti',
+                           'server_key', 'control_lock', 'outbox_event_type'] LOOP
     EXECUTE format('ALTER TABLE nina.%I ENABLE ROW LEVEL SECURITY', t);
   END LOOP;
 END $$;
@@ -3018,7 +3049,8 @@ CREATE POLICY app_update ON nina.account_deletion_request FOR UPDATE TO nina_app
 -- Identity (SR-003): cada usuario ve/escreve SO as proprias linhas; fluxos pre-autenticacao usam as funcoes auth_* (secao 11)
 ALTER TABLE nina.app_user ENABLE ROW LEVEL SECURITY;
 CREATE POLICY app_select ON nina.app_user FOR SELECT TO nina_app USING (id = nina.current_user_id());
-CREATE POLICY app_insert ON nina.app_user FOR INSERT TO nina_app WITH CHECK (id = nina.current_user_id() AND status = 'ACTIVE' AND deleted_at IS NULL);
+CREATE POLICY app_insert ON nina.app_user FOR INSERT TO nina_app
+  WITH CHECK (id = nina.current_user_id() AND status = 'ACTIVE' AND deleted_at IS NULL AND email_verified_at IS NULL);   -- NR-09: nasce NAO verificado
 CREATE POLICY app_update ON nina.app_user FOR UPDATE TO nina_app
   USING (id = nina.current_user_id() AND status = 'ACTIVE') WITH CHECK (id = nina.current_user_id() AND status = 'ACTIVE');
 
@@ -3089,14 +3121,18 @@ CREATE POLICY app_insert ON nina.caregiver_membership FOR INSERT TO nina_app
        AND invited_by = nina.current_user_id() AND invite_token_hash IS NOT NULL
        AND invite_expires_at > now() AND invite_expires_at <= now() + interval '30 days'
        AND accepted_at IS NULL AND revoked_at IS NULL AND revoked_reason IS NULL AND invite_used_at IS NULL
-       AND invite_failed_attempts = 0 AND (user_id IS NULL OR user_id <> nina.current_user_id()))
+       -- NR-13: convite so por e-mail (user_id nulo): sem convite nao solicitado a um usuario existente, sem oraculo de UUID por FK
+       AND invite_failed_attempts = 0 AND user_id IS NULL AND invited_email IS NOT NULL)
     OR
     (user_id = nina.current_user_id() AND role = 'OWNER' AND status = 'ACTIVE' AND invited_by IS NULL AND invite_token_hash IS NULL
        AND revoked_at IS NULL AND nina.can_bootstrap_owner(baby_id)));
 
--- outbox: INSERT-only para o app (sem SELECT/UPDATE: nao expoe aggregate_id de outros tenants)
+-- outbox: INSERT-only para o app (sem SELECT/UPDATE: nao expoe aggregate_id de outros tenants). NR-11: so por 4 colunas (GRANT) e
+-- so tipos "do proprio usuario": o app enfileira avisos de seguranca PARA SI; as demais mensagens (exclusao, convites, exportacao...)
+-- nascem das funcoes definer. Nunca event_key, processed_at, attempts nem available_at.
 ALTER TABLE nina.outbox_message ENABLE ROW LEVEL SECURITY;
-CREATE POLICY app_insert ON nina.outbox_message FOR INSERT TO nina_app WITH CHECK (true);
+CREATE POLICY app_insert ON nina.outbox_message FOR INSERT TO nina_app
+  WITH CHECK (event_type = 'SecurityNoticeRequested' AND aggregate_type = 'USER' AND aggregate_id = nina.current_user_id());
 
 -- assinatura / entitlement: leitura pelo titular (e pelos membros do entitlement); nenhuma escrita pelo app
 ALTER TABLE nina.subscription ENABLE ROW LEVEL SECURITY;
