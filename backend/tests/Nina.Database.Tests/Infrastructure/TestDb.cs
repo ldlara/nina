@@ -151,12 +151,41 @@ public abstract class DbTestBase(PgCluster cluster) : IAsyncLifetime
         }
     }
 
-    /// <summary>Registra, como o Identity faz, um jti de reautenticação consumido (escopo dado) e devolve o hash para vincular a um recurso.</summary>
-    public async Task<byte[]> ReauthAsync(Guid user, string scope, string seed = "jti")
+    /// <summary>Cria (como dono) uma sessão ativa do usuário: a emissão de reautenticação exige uma sessão do próprio usuário.</summary>
+    public async Task<Guid> SessionAsync(Guid user)
+    {
+        var id = Guid.NewGuid();
+        await OwnerAsync(
+            $"INSERT INTO nina.auth_session (id, user_id, device_id, platform, absolute_expires_at) VALUES ('{id}', '{user}', gen_random_uuid(), 'IOS', now() + interval '30 days')");
+        return id;
+    }
+
+    /// <summary>
+    /// Emite, como a API faz (nina.reauth_issue, com o MAC do servidor), um jti de reautenticação no livro-razão e devolve o hash (sem consumi-lo).
+    /// <paramref name="scopes"/> vazio = token de transição v1.x.
+    /// </summary>
+    public async Task<byte[]> IssueReauthAsync(Guid user, Guid session, string[] scopes, string seed = "jti", TimeSpan? lifetime = null)
     {
         var hash = Hash(seed + Guid.NewGuid());
+        var issued = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        var expires = issued + (lifetime ?? TimeSpan.FromMinutes(5));
+        var mac = ServerSigner.Sign("reauth.issue", ServerSigner.ReauthIssue(user, session, hash, scopes, issued, expires));
         await using var s = await AsApp(user);
-        Assert.True(await s.ScalarAsync<bool>("SELECT nina.consume_reauth_jti(@h, @scope, NULL, now() + interval '5 minutes')", Bytes("h", hash), P("scope", scope)));
+        await s.ExecAsync(
+            "SELECT nina.reauth_issue(@h, @s, @scopes, @iat, @exp, @mac)",
+            Bytes("h", hash), P("s", session), new NpgsqlParameter("scopes", NpgsqlDbType.Array | NpgsqlDbType.Text) { Value = scopes },
+            P("iat", issued.UtcDateTime), P("exp", expires.UtcDateTime), Bytes("mac", mac));
+        await s.CommitAsync();
+        return hash;
+    }
+
+    /// <summary>Emite (assinado) e consome, como o Identity faz, um jti de reautenticação do escopo dado e devolve o hash para vincular a um recurso.</summary>
+    public async Task<byte[]> ReauthAsync(Guid user, string scope, string seed = "jti")
+    {
+        var session = await SessionAsync(user);
+        var hash = await IssueReauthAsync(user, session, [scope], seed);
+        await using var s = await AsApp(user);
+        Assert.True(await s.ScalarAsync<bool>("SELECT nina.consume_reauth_jti(@h, @scope, @s)", Bytes("h", hash), P("scope", scope), P("s", session)));
         await s.CommitAsync();
         return hash;
     }

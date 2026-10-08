@@ -56,12 +56,17 @@ public sealed class PgCluster : IAsyncLifetime
                          ?? throw new InvalidOperationException("backend/db/migrations não encontrado");
         await new MigrationRunner(AdminConnectionString("nina_template"), migrations).ApplyAsync(CancellationToken.None);
 
-        await using var superuser = new NpgsqlConnection(AdminConnectionString("postgres"));
+        // NR-03/NR-09: o migrator/dono instala a chave de assinatura servidor-banco (a API a deriva do Security:MasterKey).
+        await new MigrationRunner(AdminConnectionString("nina_template"), migrations).ProvisionServerKeyAsync(ServerSigner.Key, CancellationToken.None);
+
+        await using var superuser = new NpgsqlConnection(AdminConnectionString("nina_template"));
         await superuser.OpenAsync();
         foreach (var (login, role) in new[] { (AppLogin, "nina_app"), (WorkerLogin, "nina_worker"), (ConfigLogin, "nina_config_admin") })
         {
             await ExecAsync(superuser, $"DROP ROLE IF EXISTS {login}");
             await ExecAsync(superuser, $"CREATE ROLE {login} LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE IN ROLE {role}");
+            // NR-04: ALTER ROLE ... SET vale para o LOGIN, nao para o papel de grupo: a infraestrutura repete os limites no login.
+            await ExecAsync(superuser, $"SELECT nina.apply_role_limits('{login}', '{role}')");
         }
     }
 
