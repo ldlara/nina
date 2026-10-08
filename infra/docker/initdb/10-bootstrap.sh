@@ -27,4 +27,17 @@ ALTER ROLE nina_config_admin WITH LOGIN PASSWORD :'config_pw' NOSUPERUSER NOCREA
 REVOKE ALL ON DATABASE nina FROM PUBLIC;
 GRANT CONNECT ON DATABASE nina TO nina_app, nina_worker, nina_config_admin;
 SQL
+# NR-03/NR-09: chave de assinatura servidor<->banco (nina.server_key). A API a deriva do Security__MasterKey
+# (HMAC-SHA256(master, "nina.v1:db-mac")); aqui o migrator/dono a instala no banco. Sem ela, reautenticacao, codigo de e-mail e
+# login social FALHAM FECHADO (NN070). A API/BFF nunca recebe credencial de dono. Rotacao: repetir este passo com a nova chave.
+if [ -n "${NINA_MASTER_KEY:-}" ]; then
+  echo "[nina-init] instalando a chave de assinatura servidor-banco"
+  KEY_HEX=$(printf '%s' "$NINA_MASTER_KEY" | base64 -d | od -An -tx1 -v | tr -d ' \n')
+  DERIVED_HEX=$(printf 'nina.v1:db-mac' | openssl dgst -sha256 -mac HMAC -macopt "hexkey:${KEY_HEX}" -r | cut -d' ' -f1)
+  psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" -v key_hex="$DERIVED_HEX" \
+    -c "SELECT nina.provision_server_key(decode(:'key_hex', 'hex'))" >/dev/null
+else
+  echo "[nina-init] AVISO: NINA_MASTER_KEY ausente; nina.server_key nao foi provisionada (reauth/codigo de e-mail falham fechado)" >&2
+fi
+
 echo "[nina-init] ok"

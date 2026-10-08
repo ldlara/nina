@@ -18,6 +18,7 @@ services:
       NINA_APP_PASSWORD: ${NINA_APP_PASSWORD:?defina NINA_APP_PASSWORD no .env}
       NINA_WORKER_PASSWORD: ${NINA_WORKER_PASSWORD:?defina NINA_WORKER_PASSWORD no .env}
       NINA_CONFIG_ADMIN_PASSWORD: ${NINA_CONFIG_ADMIN_PASSWORD:?defina NINA_CONFIG_ADMIN_PASSWORD no .env}
+      NINA_MASTER_KEY: ${NINA_MASTER_KEY:?defina NINA_MASTER_KEY no .env (Base64, >= 32 bytes)}   # so para instalar nina.server_key no bootstrap
     # Sem publicação de porta por padrão (API/BFF acessam pela rede interna do compose).
     # Para acesso do host (psql/IDE): `docker compose --profile dbhost up -d` -> 127.0.0.1:${POSTGRES_HOST_PORT:-5432}.
     volumes:
@@ -48,6 +49,7 @@ services:
     environment:
       ConnectionStrings__Default: Host=postgres;Database=nina;Username=nina_app;Password=${NINA_APP_PASSWORD:?defina NINA_APP_PASSWORD no .env}
       ASPNETCORE_ENVIRONMENT: Development
+      Security__MasterKey: ${NINA_MASTER_KEY:?defina NINA_MASTER_KEY no .env (Base64, >= 32 bytes)}
       Internal__SharedSecret: ${INTERNAL_SHARED_SECRET:?defina INTERNAL_SHARED_SECRET no .env (>= 32 caracteres)}
     # Só o código-fonte do backend (sem .env, .git, specs, mobile). Ajuste se o build precisar de mais.
     volumes: ["./backend:/src/backend"]
