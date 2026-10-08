@@ -1,6 +1,8 @@
-# Status — 2026-10-07
-- Decisões: iOS Swift, Android Kotlin, .NET + BFF, PostgreSQL, MVP completo.
-- Feito: discovery salvo em `specs/`, specification, architecture, backlog, ADR-0001..0004 (propostos).
-- Em andamento: Onda 1 (REQ-001, UX-001, PRIV-001, QA-001) e Onda 2 (ARCH, DB, API).
-- Bloqueios: ambiente sem `dotnet` SDK instalado (impede build/teste do backend neste container).
-- Próximo: aprovar ADRs; gerar glossário, domain model, OpenAPI e esqueleto do repositório.
+- Decisões de 2026-10-08 registradas: ADR-0003 aceita (change log, sync_sequence, cursor opaco, tombstones 90 dias), ADR-0005 (flags/entitlements em banco, premium por família), ADR-0006 (Docker + OpenShift), ADR-0007 (senha, Google, Apple), ADR-0008 (exclusão recursiva, com ponto aberto).
+- Ainda abertas: provedor de push; significado exato de "um adicional" no premium; exclusão do Owner com outros cuidadores; governança da hospedagem ("Shadow IT"); revisão jurídica DJ-01..13.
+- **Onda 2 concluída** (documentos e esqueleto): CLOUD-001/SEC-001 (esqueleto .NET, CI, OpenShift; build/test verdes), DB-001 (`backend/db/migrations/0001_init.sql`, validado em PostgreSQL 16: 263 asserções + pgbench com sequência contígua), API-001 (`contracts/openapi.yaml` **v1.0.0 congelado**; 70 operações; lint e validator OK).
+- Decisões fechadas: ADR-0009 e ADR-0010 (snake_case, enums MAIÚSCULOS, exclusão só Owner ativo + caminho de privacidade para os demais, 7 dias de arrependimento, 400 na validação, prazos de privacidade 48 h/15 dias, anonimização).
+- Alinhamento DB↔API: tipo de requisição de privacidade `ANONYMIZATION` nos dois; `privacy_request_ack_hours` (48 h) ainda só no contrato (falta parâmetro no banco ou no BFF).
+- Pendências jurídicas: DJ-06/07/09 (retenção, prazos, cascata) e DJ-01..13 em privacy-security-spec §11.
+- Não validado: containers (sem Docker daemon), workflow do Actions, desempenho de RLS em volume, restore de backup, PostgreSQL 15.
+- Próximo: Onda 3 — SECURITY-REVIEW-001 (esqueleto + banco + contrato), ARCH-003 (spike de sync .NET), BE-001/BE-002/BFF-001, IOS-001/AND-001.

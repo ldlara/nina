@@ -1,0 +1,4090 @@
+openapi: 3.1.0
+info:
+  title: Nina BFF API
+  version: 1.0.0
+  summary: API do BFF consumida pelos apps iOS e Android do Nina (MVP).
+  description: |
+    Contrato da API do BFF (ADR-0002) para os apps móveis. **Versão 1.0.0 (congelada para o MVP)**, conforme
+    ADR-0009 e ADR-0010. Mudanças seguem as regras da seção "Congelamento v1" de `specs/api-spec.md`: aditivas
+    são permitidas; qualquer quebra exige `/v2`. Pontos ainda abertos estão listados na mesma seção.
+
+    ## Convenções
+    - **Versionamento:** prefixo de caminho `/v1`. Mudanças aditivas (campos novos, enums novos
+      tolerados) não mudam a versão; clientes ignoram campos desconhecidos. Quebras criam `/v2`.
+      Descontinuação anunciada pelos cabeçalhos `Deprecation` e `Sunset`.
+    - **Autenticação:** `Authorization: Bearer <access_token>` (JWT/PASETO, até 15 min). Refresh
+      token opaco, rotativo e de uso único (SEC-011).
+    - **Erros:** RFC 7807 (`application/problem+json`) com `code` estável e `errors[]` por campo.
+      O cliente localiza a mensagem a partir de `code` (RF-050-A5); `title`/`detail` não são
+      para exibição direta.
+    - **Datas:** instantes em UTC (RFC 3339, sufixo `Z`); fuso contextual em `tz` (IANA);
+      datas civis `YYYY-MM-DD`; horas locais `HH:MM`. Unidade de volume: sempre `ml`.
+    - **Idempotência:** `POST` não-sync que cria efeito colateral aceita `Idempotency-Key`.
+      O sync é idempotente por `mutation_id`.
+    - **Paginação:** listas usam `limit` + `page_token` opaco. O feed de sync usa `cursor` opaco
+      (outro mecanismo, ver `/sync/pull`).
+    - **Autorização:** por bebê e papel (Owner, Caregiver, ReadOnly), sempre no servidor. Quem não
+      tem vínculo recebe `404` uniforme; quem tem vínculo sem papel suficiente recebe `403`;
+      vínculo revogado recebe `403` com `code=ACCESS_REVOKED`.
+    - **Saúde:** previsões e tendências são orientação, não diagnóstico (RNF-014); a API devolve
+      chaves de texto e o cliente localiza o aviso.
+    - **Convenção de nulos e vazios (ADR-0009):** `null` = *não se aplica* ou *indisponível/desconhecido*
+      (cada campo documenta qual dos dois, quando o contexto os distingue). `0` = valor conhecido igual a zero;
+      nunca se usa `0` para "não informado". Em enums, `UNSPECIFIED` = o usuário deliberadamente não especificou;
+      `UNKNOWN` = deveria existir mas o sistema não sabe (ex.: migração de dados antigos; reservado, o cliente
+      não o envia).
+    - **Enums em MAIÚSCULAS (ADR-0010):** **todos** os valores de enum do contrato são em maiúsculas
+      (`NAP`, `FEMALE`, `TIMER`, `OWNER`, `ACTIVE`, `APPLIED`, `WEEK`...), tanto em requisições quanto em respostas,
+      parâmetros de consulta e exemplos. Chaves de objeto, nomes de campo e chaves de mensagem (`explanation.key`,
+      `disclaimer_key`, `feature.key`) não são enums e permanecem em `snake_case`/minúsculas.
+    - **Tolerância a valores desconhecidos (ADR-0009/0010):** qualquer enum pode ganhar valores em mudança aditiva
+      (sem nova versão). O cliente **deve tolerar valores desconhecidos** em respostas (exibir como "outro"/genérico
+      ou ignorar a entrada, nunca falhar nem descartar o registro). `DiaperType`, `FeedingType` e `MilkType` são
+      marcados `x-extensible-enum` e têm os valores vigentes em `/reference-data`. O servidor rejeita valor
+      desconhecido **na entrada** com `400 VALIDATION_FAILED`.
+    - **Nomes de campo (ADR-0010):** `snake_case` em todo o contrato (confirmado; ex.: `age_calculation`,
+      `chronological_days`, `night_awakenings`).
+    - **Cadastro e escrita de eventos (ADR-0009):** a conta só fica ativa após confirmação de e-mail (a sessão
+      nasce em `POST /auth/email/verify`). Eventos de tracking são escritos **somente** por `POST /sync/push`
+      (online = lote de 1 mutação); não há `POST/PATCH/DELETE` de eventos.
+    - **Políticas por flag (ADR-0005/0009/0010):** o comportamento de sono sobreposto (`ACCEPT_AND_WARN` | `REJECT`),
+      a política de exclusão de conta (`CASCADE` | `BLOCK` | `TRANSFER_OWNERSHIP`), a janela de arrependimento da
+      exclusão (`deletion_grace_days`, padrão 7), a janela da idade corrigida (`corrected_age_max_months`, padrão 24)
+      e os prazos de atendimento de privacidade são configuração em banco, expostos em `GET /reference-data`
+      (`policies`). O mesmo vale para `limits.night_awakenings_min_session_minutes` (padrão 240). Os valores acima
+      são **padrões iniciais, customizáveis em banco**; o cliente não decide, apenas reflete o valor vigente.
+    - **Exclusão de conta e direitos do titular (ADR-0010):** só o **Owner ativo de um bebê** solicita a exclusão da
+      conta (`/me/deletion-request`; `403 FORBIDDEN_ROLE` para os demais). Quem não é Owner exerce acesso, correção,
+      exportação e eliminação/anonimização dos **próprios dados pessoais** em `/me/privacy-requests`, sem apagar os
+      dados do bebê. Ambos exigem reautenticação (`X-Reauth-Token`).
+    - **Mamada (ADR-0010):** `end_at` é obrigatório em `BREASTFEEDING` (PA-05 resolvido).
+  contact:
+    name: Time Nina (API)
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: https://api.nina.app/v1
+    description: Produção (placeholder, domínio a confirmar)
+  - url: https://api.staging.nina.app/v1
+    description: Homologação (placeholder)
+security:
+  - bearerAuth: []
+tags:
+  - name: Auth
+    description: Cadastro, login (e-mail/senha, Google, Apple), refresh, logout e recuperação de acesso.
+  - name: Account
+    description: Perfil do usuário, identidades vinculadas, sessões e dispositivos, tokens de push.
+  - name: Babies
+    description: Perfis de bebê.
+  - name: Caregivers
+    description: Cuidadores, convites e papéis.
+  - name: Tracking
+    description: Leitura de eventos (sono, mamada, mamadeira, fralda, pumping) e timeline. Escrita via Sync. Despertares (`WakeEvent`) trafegam só no Sync.
+  - name: Sync
+    description: Push idempotente de mutações e pull incremental por cursor opaco.
+  - name: Sleep
+    description: Previsão de sono e preferências de rotina.
+  - name: Charts
+    description: Agregações e comparações com o próprio histórico.
+  - name: Notifications
+    description: Preferências de notificação por bebê.
+  - name: Subscriptions
+    description: Entitlement, feature flags, compras e restauração.
+  - name: Privacy
+    description: Consentimentos, exportação, exclusão de conta (Owner), requisições de privacidade (demais titulares) e auditoria.
+  - name: Reference
+    description: Dados de referência e parâmetros configuráveis.
+
+paths:
+  # ------------------------------------------------------------------ AUTH
+  /auth/register:
+    post:
+      tags: [Auth]
+      operationId: registerWithEmail
+      summary: Cadastrar conta com e-mail e senha
+      description: |
+        Resposta **uniforme** (`202`) exista ou não o e-mail, para impedir enumeração (RF-001-A2).
+        Um código de verificação é enviado ao e-mail; **a conta só fica ativa após a confirmação por e-mail** e a
+        sessão só é emitida em `/auth/email/verify` (ADR-0009, decisão 1).
+        Aceite de Termos e Política é obrigatório (RF-003-A1).
+      security: []
+      x-rf: [RF-001, RF-003]
+      x-roles: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+            examples:
+              default:
+                value:
+                  email: ana@example.org
+                  password: correct-horse-battery-staple
+                  display_name: Ana
+                  locale: pt-BR
+                  timezone: America/Sao_Paulo
+                  consents:
+                    - { purpose_key: TERMS_OF_USE, document_version: 1.0.0 }
+                    - { purpose_key: PRIVACY_POLICY, document_version: 1.0.0 }
+      responses:
+        '202':
+          description: Verificação enviada (resposta idêntica para e-mail novo ou existente).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VerificationPending' }
+              examples:
+                default: { value: { status: VERIFICATION_PENDING, resend_after_seconds: 60 } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/email/verify:
+    post:
+      tags: [Auth]
+      operationId: verifyEmail
+      summary: Confirmar e-mail e abrir a primeira sessão
+      description: Ativa a conta (ADR-0009) e emite a primeira sessão. Antes disso não existe sessão nem conta ativa.
+      security: []
+      x-rf: [RF-001]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EmailVerifyRequest' }
+      responses:
+        '200':
+          description: Sessão emitida.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: loginWithPassword
+      summary: Login com e-mail e senha
+      description: Credenciais inválidas retornam erro genérico (`INVALID_CREDENTIALS`). Após N falhas aplica-se limite de taxa (D-16).
+      security: []
+      x-rf: [RF-001]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+            examples:
+              default:
+                value:
+                  email: ana@example.org
+                  password: correct-horse-battery-staple
+                  device:
+                    device_id: 6f1d1c5e-4a3b-4f0e-9a52-0b5b3c8a7e11
+                    platform: IOS
+                    device_label: iPhone de Ana
+                    app_version: 1.0.0
+      responses:
+        '200':
+          description: Sessão emitida.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/google:
+    post:
+      tags: [Auth]
+      operationId: loginWithGoogle
+      summary: Login ou cadastro com Google
+      description: |
+        O servidor valida assinatura, `aud`, `iss`, expiração e `nonce` do `id_token` (ADR-0007).
+        Se o e-mail verificado já pertence a uma conta com outro método, **não há fusão
+        automática**: responde `409 IDENTITY_LINK_REQUIRED`; o usuário entra pelo método original
+        e vincula em `POST /me/identities`. Para conta nova sem `consents`, responde `403 CONSENT_REQUIRED`.
+      security: []
+      x-rf: [RF-001, RF-003]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SocialLoginRequest' }
+      responses:
+        '200':
+          description: Sessão emitida (conta existente ou criada).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/apple:
+    post:
+      tags: [Auth]
+      operationId: loginWithApple
+      summary: Login ou cadastro com Apple
+      description: Mesmas regras de `/auth/google`. Nome só é enviado pela Apple no primeiro login; o cliente o repassa em `given_name`/`family_name`.
+      security: []
+      x-rf: [RF-001, RF-003]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SocialLoginRequest' }
+      responses:
+        '200':
+          description: Sessão emitida.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshSession
+      summary: Rotacionar refresh token
+      description: |
+        Refresh token é de uso único. Reuso de um token já rotacionado revoga toda a família da
+        sessão e responde `401 REFRESH_TOKEN_REUSED` (SEC-011). Sessão revogada responde `401 SESSION_REVOKED`;
+        o cliente **não** apaga mutações pendentes (RF-001-A4).
+      security: []
+      x-rf: [RF-001, RF-054]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshRequest' }
+      responses:
+        '200':
+          description: Novo par de tokens.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Encerrar a sessão atual
+      description: Revoga a sessão do token usado e remove o token de push do dispositivo. Idempotente.
+      x-rf: [RF-054]
+      x-roles: [Any]
+      responses:
+        '204': { description: Sessão encerrada. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/password/forgot:
+    post:
+      tags: [Auth]
+      operationId: requestPasswordReset
+      summary: Solicitar recuperação de senha
+      description: Resposta idêntica para e-mail cadastrado ou não (RF-002-A1).
+      security: []
+      x-rf: [RF-002]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '202': { description: 'Se o e-mail existir, instruções foram enviadas.' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/password/reset:
+    post:
+      tags: [Auth]
+      operationId: resetPassword
+      summary: Definir nova senha com token de recuperação
+      description: Consome o token, troca a senha e encerra todas as outras sessões (RF-002-A2). Token expirado ou usado é recusado (RF-002-A3).
+      security: []
+      x-rf: [RF-002]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, new_password]
+              properties:
+                token: { type: string, writeOnly: true }
+                new_password: { type: string, format: password, writeOnly: true }
+      responses:
+        '204': { description: Senha alterada. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/reauthenticate:
+    post:
+      tags: [Auth]
+      operationId: reauthenticate
+      summary: Reautenticar para operação sensível
+      description: |
+        Devolve `reauth_token` de curta duração (padrão 5 min), enviado no cabeçalho `X-Reauth-Token`
+        em exportação, exclusão de conta/bebê, troca de e-mail/senha e transferência de propriedade.
+      x-rf: [RF-044, RF-045]
+      x-roles: [Any]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReauthRequest' }
+      responses:
+        '200':
+          description: Reautenticado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReauthResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  # --------------------------------------------------------------- ACCOUNT
+  /me:
+    get:
+      tags: [Account]
+      operationId: getMe
+      summary: Obter o usuário autenticado
+      x-rf: [RF-001, RF-040]
+      x-roles: [Any]
+      responses:
+        '200':
+          description: Usuário.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      tags: [Account]
+      operationId: updateMe
+      summary: Atualizar perfil (nome, idioma, fuso)
+      x-rf: [RF-050]
+      x-roles: [Any]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserUpdate' }
+      responses:
+        '200':
+          description: Usuário atualizado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /me/password:
+    put:
+      tags: [Account]
+      operationId: changePassword
+      summary: Alterar senha
+      description: Exige `X-Reauth-Token`. Revoga as outras sessões e dispara aviso de segurança (RF-002-A5).
+      x-rf: [RF-002]
+      x-roles: [Any]
+      parameters:
+        - $ref: '#/components/parameters/ReauthToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_password]
+              properties:
+                new_password: { type: string, format: password, writeOnly: true }
+      responses:
+        '204': { description: Senha alterada. }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /me/email-changes:
+    post:
+      tags: [Account]
+      operationId: requestEmailChange
+      summary: Solicitar troca de e-mail
+      description: Exige `X-Reauth-Token`. Envia código ao novo e-mail; confirmação em `/me/email-changes/confirm`. Aviso de segurança ao e-mail antigo (RF-002-A5).
+      x-rf: [RF-002, RF-055]
+      x-roles: [Any]
+      parameters:
+        - $ref: '#/components/parameters/ReauthToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_email]
+              properties:
+                new_email: { type: string, format: email }
+      responses:
+        '202': { description: Código enviado (resposta uniforme). }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /me/email-changes/confirm:
+    post:
+      tags: [Account]
+      operationId: confirmEmailChange
+      summary: Confirmar troca de e-mail
+      x-rf: [RF-002]
+      x-roles: [Any]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, writeOnly: true }
+      responses:
+        '200':
+          description: E-mail alterado; as outras sessões foram revogadas.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /me/identities:
+    post:
+      tags: [Account]
+      operationId: linkIdentity
+      summary: Vincular identidade Google ou Apple à conta logada
+      description: Única forma de unir métodos de login sobre o mesmo e-mail (ADR-0007). Exige `X-Reauth-Token`.
+      x-rf: [RF-001]
+      x-roles: [Any]
+      parameters:
+        - $ref: '#/components/parameters/ReauthToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, id_token, nonce]
+              properties:
+                provider: { $ref: '#/components/schemas/IdentityProvider' }
+                id_token: { type: string, writeOnly: true }
+                nonce: { type: string }
+      responses:
+        '200':
+          description: Identidade vinculada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /me/identities/{provider}:
+    delete:
+      tags: [Account]
+      operationId: unlinkIdentity
+      summary: Desvincular identidade
+      description: Recusa (`409 LAST_LOGIN_METHOD`) se for o único método de login.
+      x-rf: [RF-001]
+      x-roles: [Any]
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/IdentityProvider' }
+        - $ref: '#/components/parameters/ReauthToken'
+      responses:
+        '204': { description: Desvinculada. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /me/sessions:
+    get:
+      tags: [Account]
+      operationId: listSessions
+      summary: Listar sessões e dispositivos ativos
+      description: Só as sessões do próprio usuário (RF-054-A3). A sessão atual vem com `is_current=true`.
+      x-rf: [RF-054]
+      x-roles: [Any]
+      responses:
+        '200':
+          description: Sessões ativas.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Session' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /me/sessions/{session_id}:
+    delete:
+      tags: [Account]
+      operationId: revokeSession
+      summary: Revogar uma sessão
+      description: Tokens da sessão deixam de funcionar imediatamente. Revogar a atual equivale a sair (RF-054-A4).
+      x-rf: [RF-054, RF-002]
+      x-roles: [Any]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Revogada (idempotente). }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /me/session-revocations:
+    post:
+      tags: [Account]
+      operationId: revokeOtherSessions
+      summary: Encerrar todas as outras sessões
+      description: A sessão atual permanece ativa (RF-002-A4).
+      x-rf: [RF-002, RF-054]
+      x-roles: [Any]
+      responses:
+        '200':
+          description: Quantidade de sessões revogadas.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revoked_count]
+                properties:
+                  revoked_count: { type: integer, minimum: 0 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /me/push-tokens/{device_id}:
+    put:
+      tags: [Account]
+      operationId: registerPushToken
+      summary: Registrar ou atualizar token de push do dispositivo (APNs/FCM)
+      description: |
+        Upsert por `device_id` (o mesmo informado no login). Token inválido reportado pelo provedor
+        é removido pelo servidor (RF-039-A4). O conteúdo da notificação é neutro por padrão (privacy-security-spec R8).
+      x-rf: [RF-037, RF-039]
+      x-roles: [Any]
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PushTokenRegistration' }
+            examples:
+              apns:
+                value:
+                  platform: APNS
+                  token: 740f4707bebcf74f9b7c25d48e3358945f6aa01da5ddb387462c7eaf61bb78ad
+                  environment: PRODUCTION
+                  app_version: 1.0.0
+                  locale: pt-BR
+                  os_notifications_authorized: true
+      responses:
+        '200':
+          description: Registrado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PushToken' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    delete:
+      tags: [Account]
+      operationId: unregisterPushToken
+      summary: Remover token de push do dispositivo
+      x-rf: [RF-037]
+      x-roles: [Any]
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '204': { description: Removido (idempotente). }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ----------------------------------------------------------------- BABIES
+  /babies:
+    get:
+      tags: [Babies]
+      operationId: listBabies
+      summary: Listar bebês acessíveis ao usuário
+      description: Inclui bebês em que o usuário tem vínculo `ACTIVE`, com o papel dele em `my_role`.
+      x-rf: [RF-004]
+      x-roles: [Owner, Caregiver, ReadOnly]
+      responses:
+        '200':
+          description: Bebês.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Baby' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Babies]
+      operationId: createBaby
+      summary: Criar perfil de bebê
+      description: |
+        O criador vira Owner ativo. `id` pode ser gerado no cliente. Exige a declaração de
+        responsável legal (`child_data_guardian`) já consentida, senão `403 CONSENT_REQUIRED`.
+      x-rf: [RF-004, RF-005]
+      x-roles: [Any authenticated]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BabyCreate' }
+            examples:
+              default:
+                value:
+                  display_name: Nina
+                  birth_date: '2026-01-10'
+                  due_date: '2026-01-24'
+                  timezone: America/Sao_Paulo
+      responses:
+        '201':
+          description: Bebê criado.
+          headers:
+            Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Baby' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/IdempotencyKeyReuse' }
+  /babies/{baby_id}:
+    parameters:
+      - $ref: '#/components/parameters/BabyId'
+    get:
+      tags: [Babies]
+      operationId: getBaby
+      summary: Obter bebê
+      description: |
+        Inclui idades calculadas na data local do bebê (RF-005). `age_calculation` é a fonte canônica da idade
+        cronológica e corrigida em dias; a idade corrigida **nunca é persistida** (ADR-0009).
+      x-rf: [RF-004, RF-005]
+      x-roles: [Owner, Caregiver, ReadOnly]
+      responses:
+        '200':
+          description: Bebê.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Baby' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Babies]
+      operationId: updateBaby
+      summary: Editar bebê
+      description: |
+        **Somente o Owner** edita o perfil do bebê (ADR-0009, decisão 6); Caregiver e ReadOnly recebem
+        `403 FORBIDDEN_ROLE`. Merge-patch. Alterar `birth_date`, `due_date` ou `timezone` recalcula idades e
+        previsões e **não** altera eventos históricos (RB-003/014). `If-Match` com a `version` evita sobrescrita.
+      x-rf: [RF-004, RF-005, RF-012]
+      x-roles: [Owner]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: { $ref: '#/components/schemas/BabyUpdate' }
+      responses:
+        '200':
+          description: Bebê atualizado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Baby' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Papel insuficiente (`FORBIDDEN_ROLE` para Caregiver e ReadOnly) ou vínculo revogado (`ACCESS_REVOKED`).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                notOwner:
+                  value:
+                    type: https://api.nina.app/problems/forbidden-role
+                    title: Only the Owner can edit the baby profile
+                    status: 403
+                    code: FORBIDDEN_ROLE
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+    delete:
+      tags: [Babies]
+      operationId: deleteBaby
+      summary: Excluir bebê para todos os cuidadores
+      description: |
+        Apenas Owner, com `X-Reauth-Token`. Apaga eventos, previsões e preferências, gera tombstone de
+        sync e invalida caches (RB-008/015). Se houver outros cuidadores ativos exige
+        `acknowledge_other_caregivers=true` (aviso explícito, ADR-0008).
+      x-rf: [RF-045, RF-055]
+      x-roles: [Owner]
+      parameters:
+        - $ref: '#/components/parameters/ReauthToken'
+        - name: acknowledge_other_caregivers
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        '204': { description: Excluído. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # -------------------------------------------------------------- CAREGIVERS
+  /babies/{baby_id}/caregivers:
+    parameters:
+      - $ref: '#/components/parameters/BabyId'
+    get:
+      tags: [Caregivers]
+      operationId: listCaregivers
+      summary: Listar cuidadores e convites pendentes
+      description: Vínculos `PENDING` e `ACTIVE`. E-mail do convidado só é visível ao Owner; demais papéis veem `display_name`.
+      x-rf: [RF-006]
+      x-roles: [Owner, Caregiver, ReadOnly]
+      responses:
+        '200':
+          description: Vínculos.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Membership' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /babies/{baby_id}/caregivers/{membership_id}:
+    parameters:
+      - $ref: '#/components/parameters/BabyId'
+      - $ref: '#/components/parameters/MembershipId'
+    patch:
+      tags: [Caregivers]
+      operationId: updateCaregiverRole
+      summary: Alterar papel de um cuidador
+      description: Owner não pode rebaixar a si mesmo sem transferir a propriedade (RF-006-A7). Gera AuditEvent.
+      x-rf: [RF-006, RF-055]
+      x-roles: [Owner]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { $ref: '#/components/schemas/InvitableRole' }
+      responses:
+        '200':
+          description: Vínculo atualizado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Membership' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Caregivers]
+      operationId: removeCaregiver
+      summary: Remover cuidador (ou sair do bebê)
+      description: |
+        Owner remove qualquer não-Owner. Caregiver/ReadOnly pode remover o **próprio** vínculo (sair).
+        Efeito imediato: tokens, cache e cursor do removido para o bebê são invalidados (RB-015, INV-14);
+        a próxima chamada dele recebe `403 ACCESS_REVOKED`. Também cancela convite pendente.
+      x-rf: [RF-006, RF-007, RF-055]
+      x-roles: [Owner, "Caregiver/ReadOnly (apenas o próprio vínculo)"]
+      responses:
+        '204': { description: Removido. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /babies/{baby_id}/invitations:
+    parameters:
+      - $ref: '#/components/parameters/BabyId'
+    post:
+      tags: [Caregivers]
+      operationId: createInvitation
+      summary: Convidar cuidador por e-mail
+      description: |
+        Cria vínculo `PENDING` e envia o convite. A resposta não revela se o e-mail tem conta (SEC-051).
+        Token aleatório de 128 bits ou mais, uso único, expira em 7 dias (SEC-004; D-17). Limite diário por Owner.
+        Reconvite de quem já está vinculado não cria segundo vínculo (RF-006-A8): responde `409 ALREADY_MEMBER`.
+      x-rf: [RF-006, RF-055]
+      x-roles: [Owner]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvitationCreate' }
+            examples:
+              default: { value: { email: avo@example.org, role: CAREGIVER } }
+      responses:
+        '201':
+          description: Convite criado.
+          headers:
+            Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Membership' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/IdempotencyKeyReuse' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /babies/{baby_id}/invitations/{membership_id}/resend:
+    parameters:
+      - $ref: '#/components/parameters/BabyId'
+      - $ref: '#/components/parameters/MembershipId'
+    post:
+      tags: [Caregivers]
+      operationId: resendInvitation
+      summary: Reenviar convite pendente
+      description: Gera novo token e invalida o anterior; renova a expiração.
+      x-rf: [RF-006]
+      x-roles: [Owner]
+      responses:
+        '200':
+          description: Convite reenviado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Membership' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /babies/{baby_id}/ownership-transfer:
+    parameters:
+      - $ref: '#/components/parameters/BabyId'
+    post:
+      tags: [Caregivers]
+      operationId: transferOwnership
+      summary: Transferir a propriedade do bebê
+      description: Exige `X-Reauth-Token` e destino com vínculo `ACTIVE`. O Owner anterior vira Caregiver. Gera AuditEvent.
+      x-rf: [RF-006, RF-045, RF-055]
+      x-roles: [Owner]
+      parameters:
+        - $ref: '#/components/parameters/ReauthToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_owner_membership_id]
+              properties:
+                new_owner_membership_id: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Propriedade transferida.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Baby' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /invitations/inspect:
+    post:
+      tags: [Caregivers]
+      operationId: inspectInvitation
+      summary: Ver prévia do convite recebido
+      description: |
+        Autenticado como convidado. Mostra convidante, papel e rótulo reduzido do bebê (sem nome completo
+        antes do aceite, UX 4.7). Token inválido, expirado ou de outro e-mail: `404` uniforme.
+        POST evita o token em URL/log.
+      x-rf: [RF-006]
+      x-roles: [Invitee]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvitationToken' }
+      responses:
+        '200':
+          description: Prévia.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvitationPreview' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /invitations/accept:
+    post:
+      tags: [Caregivers]
+      operationId: acceptInvitation
+      summary: Aceitar convite
+      description: |
+        Vínculo vira `ACTIVE` com o papel atribuído. O convidado precisa ter aceito os Termos na própria
+        conta (senão `403 CONSENT_REQUIRED`). Em seguida o app faz o pull inicial (RF-007-A4).
+      x-rf: [RF-006, RF-007]
+      x-roles: [Invitee]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvitationToken' }
+      responses:
+        '200':
+          description: Aceito.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Baby' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /invitations/decline:
+    post:
+      tags: [Caregivers]
+      operationId: declineInvitation
+      summary: Recusar convite
+      x-rf: [RF-006]
+      x-roles: [Invitee]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvitationToken' }
+      responses:
+        '204': { description: Recusado. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # --------------------------------------------------------------- TRACKING
+  /babies/{baby_id}/timeline:
+    parameters:
+      - $ref: '#/components/parameters/BabyId'
+    get:
+      tags: [Tracking]
+      operationId: getTimeline
+      summary: Timeline unificada de eventos
+      description: |
+        Eventos não excluídos em ordem decrescente de `start_at` (ou `occurred_at` na fralda), desempate por `id`.
+        Sessões em aberto vêm primeiro quando `include_open=true`. Apps usam o banco local; este endpoint serve
+        consulta online, retomada e relatórios. Horários em UTC; o cliente exibe no fuso do bebê (RF-019-A8).
+        Alvo: p95 < 500 ms (RNF-005).
+      x-rf: [RF-019, RF-010]
+      x-roles: [Owner, Caregiver, ReadOnly]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/PageToken'
+        - name: types
+          in: query
+          description: Filtra por tipo de evento.
+          schema:
+            type: array
+            items: { $ref: '#/components/schemas/EventType' }
+          style: form
+          explode: false
+        - name: from
+          in: query
+          description: Início da janela (inclusive, UTC).
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: Fim da janela (exclusivo, UTC).
+          schema: { type: string, format: date-time }
+        - name: include_open
+          in: query
+          schema: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Página de eventos.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TimelinePage' }
+              examples:
+                default:
+                  value:
+                    items:
+                      - event_type: SLEEP
+                        id: 0b8f1a52-6f3e-4a0c-8f86-6c3d7a3c1a10
+                        baby_id: 7d0a5c9e-1c0b-4d3a-b5f4-2f9d0e6a8b21
+                        version: 2
+                        tz: America/Sao_Paulo
+                        created_at: '2026-10-08T17:02:11Z'
+                        updated_at: '2026-10-08T17:50:40Z'
+                        created_by: { id: 3c1c0d0e-5b61-4d6e-8a3a-0a0c5d1d9f01, display_name: Ana }
+                        last_modified_by: { id: 3c1c0d0e-5b61-4d6e-8a3a-0a0c5d1d9f01, display_name: Ana }
+                        sleep_type: NAP
+                        start_at: '2026-10-08T17:00:00Z'
+                        end_at: '2026-10-08T17:48:00Z'
+                        duration_seconds: 2880
+                        source: TIMER
+                    page: { next_page_token: null, has_more: false }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /babies/{baby_id}/events/{event_id}:
+    parameters:
+      - $ref: '#/components/parameters/BabyId'
+      - $ref: '#/components/parameters/EventId'
+    get:
+      tags: [Tracking]
+      operationId: getEvent
+      summary: Obter um evento
+      description: Evento excluído responde `404`. Escrita (criar, editar, excluir) é feita exclusivamente por `POST /sync/push`.
+      x-rf: [RF-019, RF-020]
+      x-roles: [Owner, Caregiver, ReadOnly]
+      responses:
+        '200':
+          description: Evento.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /babies/{baby_id}/events/{event_id}/history:
+    parameters:
+      - $ref: '#/components/parameters/BabyId'
+      - $ref: '#/components/parameters/EventId'
+    get:
+      tags: [Tracking]
+      operationId: getEventHistory
+      summary: Histórico mínimo de alterações de um evento
+      description: Quem alterou, quando e quais campos (sem conteúdo livre, INV-28). Alcance exato em D-25.
+      x-rf: [RF-020, RF-055]
+      x-roles: [Owner, Caregiver]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/PageToken'
+      responses:
+        '200':
+          description: Histórico, mais recente primeiro.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/EventHistoryEntry' }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ------------------------------------------------------------------- SYNC
+  /sync/push:
+    post:
+      tags: [Sync]
+      operationId: pushMutations
+      summary: Enviar mutações do cliente (idempotente)
+      description: |
+        Único caminho de escrita de eventos de tracking (criar, editar, excluir). Até 100 mutações por
+        requisição, processadas **em ordem**. Cada uma é idempotente por `mutation_id`: reenvio devolve
+        `status=DUPLICATE` com o estado canônico, sem duplicar efeito (RF-046-A3, INV-18).
+
+        O resultado é **por mutação**; falha de uma não impede as demais. A requisição só falha inteira
+        em `401`, `429`, `413`, `400` (envelope inválido) ou `426`.
+
+        Regras: `base_version` é a versão do servidor que o cliente conhecia (0 em criação). Edições
+        concorrentes são resolvidas por last-write-wins por campo e auditadas (`resolution`, `conflicts`).
+        Update sobre tombstone **não ressuscita** (`REJECTED`, `ENTITY_DELETED`). `device_id` deve ser o da
+        sessão. `client_created_at` é preservado mesmo com relógio errado; anomalia grande vem em `warnings`.
+
+        **Sono sobreposto (ADR-0009, decisão 5):** governado pela flag `sleep_overlap_policy`
+        (`GET /reference-data` -> `policies`). Padrão `ACCEPT_AND_WARN`: a mutação é `APPLIED` com
+        `resolution=KEPT_BOTH` e `warnings[SLEEP_OVERLAP]`. Com `REJECT`: a mutação é `REJECTED`,
+        `problem.code=SLEEP_OVERLAP`, `retryable=false`, sem alterar estado.
+
+        **Entidades:** `SLEEP_SESSION`, `FEEDING_SESSION`, `PUMPING_SESSION`, `DIAPER_EVENT` e `WAKE_EVENT`
+        (despertar, ADR-0009). Excluir uma `SLEEP_SESSION` gera tombstone também dos seus `WAKE_EVENT`.
+        Mamada `BREASTFEEDING` exige `end_at` (PA-05 resolvido, ADR-0010; o timer vive só no cliente até parar).
+      x-rf: [RF-046, RF-047, RF-008, RF-009, RF-015, RF-016, RF-017, RF-018, RF-020]
+      x-roles: [Owner, Caregiver]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PushRequest' }
+            examples:
+              sleepTimerStartThenStop:
+                summary: Iniciar e parar soneca offline, mais uma fralda
+                value:
+                  device_id: 6f1d1c5e-4a3b-4f0e-9a52-0b5b3c8a7e11
+                  mutations:
+                    - mutation_id: 9c1d2e3f-0a1b-4c2d-8e3f-1a2b3c4d5e01
+                      op: CREATE
+                      entity_type: SLEEP_SESSION
+                      entity_id: 0b8f1a52-6f3e-4a0c-8f86-6c3d7a3c1a10
+                      baby_id: 7d0a5c9e-1c0b-4d3a-b5f4-2f9d0e6a8b21
+                      base_version: 0
+                      client_created_at: '2026-10-08T17:00:02Z'
+                      data:
+                        sleep_type: NAP
+                        start_at: '2026-10-08T17:00:00Z'
+                        end_at: null
+                        tz: America/Sao_Paulo
+                        source: TIMER
+                    - mutation_id: 9c1d2e3f-0a1b-4c2d-8e3f-1a2b3c4d5e02
+                      op: UPDATE
+                      entity_type: SLEEP_SESSION
+                      entity_id: 0b8f1a52-6f3e-4a0c-8f86-6c3d7a3c1a10
+                      baby_id: 7d0a5c9e-1c0b-4d3a-b5f4-2f9d0e6a8b21
+                      base_version: 1
+                      client_created_at: '2026-10-08T17:48:05Z'
+                      data:
+                        end_at: '2026-10-08T17:48:00Z'
+                    - mutation_id: 9c1d2e3f-0a1b-4c2d-8e3f-1a2b3c4d5e03
+                      op: CREATE
+                      entity_type: DIAPER_EVENT
+                      entity_id: 5e2f0b1a-3c4d-4e5f-9a6b-7c8d9e0f1a2b
+                      baby_id: 7d0a5c9e-1c0b-4d3a-b5f4-2f9d0e6a8b21
+                      base_version: 0
+                      client_created_at: '2026-10-08T17:55:00Z'
+                      data:
+                        occurred_at: '2026-10-08T17:54:00Z'
+                        tz: America/Sao_Paulo
+                        diaper_type: WET
+              deleteEvent:
+                summary: Excluir evento
+                value:
+                  device_id: 6f1d1c5e-4a3b-4f0e-9a52-0b5b3c8a7e11
+                  mutations:
+                    - mutation_id: 9c1d2e3f-0a1b-4c2d-8e3f-1a2b3c4d5e04
+                      op: DELETE
+                      entity_type: DIAPER_EVENT
+                      entity_id: 5e2f0b1a-3c4d-4e5f-9a6b-7c8d9e0f1a2b
+                      baby_id: 7d0a5c9e-1c0b-4d3a-b5f4-2f9d0e6a8b21
+                      base_version: 1
+                      client_created_at: '2026-10-08T18:10:00Z'
+      responses:
+        '200':
+          description: Resultado por mutação, na mesma ordem do pedido.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PushResponse' }
+              examples:
+                mixed:
+                  value:
+                    server_time: '2026-10-08T18:10:03Z'
+                    results:
+                      - mutation_id: 9c1d2e3f-0a1b-4c2d-8e3f-1a2b3c4d5e01
+                        status: APPLIED
+                        entity_type: SLEEP_SESSION
+                        entity_id: 0b8f1a52-6f3e-4a0c-8f86-6c3d7a3c1a10
+                        version: 1
+                        resolution: NONE
+                      - mutation_id: 9c1d2e3f-0a1b-4c2d-8e3f-1a2b3c4d5e02
+                        status: DUPLICATE
+                        entity_type: SLEEP_SESSION
+                        entity_id: 0b8f1a52-6f3e-4a0c-8f86-6c3d7a3c1a10
+                        version: 2
+                        resolution: NONE
+                      - mutation_id: 9c1d2e3f-0a1b-4c2d-8e3f-1a2b3c4d5e04
+                        status: REJECTED
+                        entity_type: DIAPER_EVENT
+                        entity_id: 5e2f0b1a-3c4d-4e5f-9a6b-7c8d9e0f1a2b
+                        retryable: false
+                        problem:
+                          type: https://api.nina.app/problems/entity-deleted
+                          title: Entity already deleted
+                          status: 409
+                          code: ENTITY_DELETED
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '426': { $ref: '#/components/responses/UpgradeRequired' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /sync/pull:
+    get:
+      tags: [Sync]
+      operationId: pullChanges
+      summary: Obter mudanças do bebê por cursor opaco
+      description: |
+        **Sem `cursor`**: snapshot completo (todas as entidades vivas do bebê, paginado). O servidor fixa o
+        ponto de consistência na primeira página, de modo que o último `next_cursor` do snapshot continua em delta.
+        **Com `cursor`**: delta, apenas mudanças posteriores, incluindo **tombstones** (`op=TOMBSTONE`).
+
+        Entidades do feed: `BABY`, `SLEEP_SESSION`, `FEEDING_SESSION`, `PUMPING_SESSION`, `DIAPER_EVENT`,
+        `WAKE_EVENT` (despertares, ADR-0009), `SLEEP_PREFERENCES` e `SLEEP_PREDICTION`. Um `WAKE_EVENT` removido
+        (ou removido em cascata com sua `SLEEP_SESSION`) chega como `TOMBSTONE`.
+
+        O cursor é **opaco**: o cliente só o guarda e o devolve, nunca interpreta nem compara. Aplicação das
+        mudanças é idempotente e ordenada por `version` por entidade; se `has_more=true`, continuar com `next_cursor`.
+
+        **Cursor expirado (> 90 dias, janela de tombstones, ADR-0003) ou inválido** responde `410 SYNC_CURSOR_EXPIRED`
+        com `resync_required=true`: o cliente descarta o estado sincronizado do bebê, **preserva a fila de mutações
+        pendentes**, refaz o pull sem cursor e reenvia as pendentes. Vínculo revogado: `403 ACCESS_REVOKED`
+        (o cliente apaga os dados locais do bebê).
+      x-rf: [RF-007, RF-046, RF-047, RF-019]
+      x-roles: [Owner, Caregiver, ReadOnly]
+      parameters:
+        - name: baby_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: cursor
+          in: query
+          required: false
+          description: Cursor opaco devolvido por uma resposta anterior. Omitir para snapshot.
+          schema: { $ref: '#/components/schemas/SyncCursor' }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 200 }
+      responses:
+        '200':
+          description: Página de mudanças.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PullResponse' }
+              examples:
+                delta:
+                  value:
+                    mode: DELTA
+                    baby_id: 7d0a5c9e-1c0b-4d3a-b5f4-2f9d0e6a8b21
+                    server_time: '2026-10-08T18:10:03Z'
+                    has_more: false
+                    next_cursor: eyJ2IjoxLCJwIjoiYWJjIn0.q8Zx
+                    changes:
+                      - op: UPSERT
+                        entity_type: DIAPER_EVENT
+                        entity_id: 5e2f0b1a-3c4d-4e5f-9a6b-7c8d9e0f1a2b
+                        version: 1
+                        entity:
+                          event_type: DIAPER
+                          id: 5e2f0b1a-3c4d-4e5f-9a6b-7c8d9e0f1a2b
+                          baby_id: 7d0a5c9e-1c0b-4d3a-b5f4-2f9d0e6a8b21
+                          version: 1
+                          tz: America/Sao_Paulo
+                          created_at: '2026-10-08T17:55:01Z'
+                          updated_at: '2026-10-08T17:55:01Z'
+                          created_by: { id: 3c1c0d0e-5b61-4d6e-8a3a-0a0c5d1d9f01, display_name: Ana }
+                          last_modified_by: { id: 3c1c0d0e-5b61-4d6e-8a3a-0a0c5d1d9f01, display_name: Ana }
+                          occurred_at: '2026-10-08T17:54:00Z'
+                          diaper_type: WET
+                      - op: TOMBSTONE
+                        entity_type: SLEEP_SESSION
+                        entity_id: 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d
+                        version: 4
+                        deleted_at: '2026-10-08T18:00:00Z'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '410': { $ref: '#/components/responses/CursorExpired' }
+        '426': { $ref: '#/components/responses/UpgradeRequired' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  # ------------------------------------------------------------------ SLEEP
+  /babies/{baby_id}/predictions/sleep:
+    parameters:
+      - $ref: '#/components/parameters/BabyId'
+    get:
+      tags: [Sleep]
+      operationId: getSleepPredictions
+      summary: Previsão vigente de próxima soneca e bedtime
+      description: |
+        Previsão é entidade derivada e nunca altera eventos (RB-001, INV-05). `status`:
+        `AVAILABLE`, `SLEEPING` (timer em curso: sem previsão de soneca, RF-011-A8) ou `INSUFFICIENT_DATA`.
+        Confiança em três níveis, sem percentual (UX 4.5). Explicação é chave + parâmetros, localizada pelo cliente.
+        Offline, o cliente usa a baseline por idade e sinaliza que não é a do servidor (RF-011-A10).
+      x-rf: [RF-011, RF-012, RF-013]
+      x-roles: [Owner, Caregiver, ReadOnly]
+      responses:
+        '200':
+          description: Previsões vigentes.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SleepPredictionResponse' }
+              examples:
+                default:
+                  value:
+                    status: AVAILABLE
+                    disclaimer_key: prediction.estimate_not_diagnosis
+                    predictions:
+                      - id: 2b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9
+                        baby_id: 7d0a5c9e-1c0b-4d3a-b5f4-2f9d0e6a8b21
+                        version: 12
+                        kind: NEXT_NAP
+                        predicted_start: '2026-10-08T20:10:00Z'
+                        predicted_end: '2026-10-08T20:40:00Z'
+                        confidence: { level: FAIR }
+                        explanation:
+                          key: prediction.explain.history_and_age
+                          params: { age_months: 9, days_used: 7, records_used: 24, typical_wake_minutes: 135 }
+                        model_version: rules-2026.10.1
+                        computed_at: '2026-10-08T17:48:03Z'
+                        inputs_version: 118
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /babies/{baby_id}/sleep-preferences:
+    parameters:
+      - $ref: '#/components/parameters/BabyId'
+    get:
+      tags: [Sleep]
+      operationId: getSleepPreferences
+      summary: Obter meta de sonecas e faixa de bedtime
+      x-rf: [RF-014]
+      x-roles: [Owner, Caregiver, ReadOnly]
+      responses:
+        '200':
+          description: Preferências (campos nulos = padrão por idade).
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SleepPreferences' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Sleep]
+      operationId: putSleepPreferences
+      summary: Definir meta de sonecas e faixa de bedtime
+      description: Substitui o conjunto. Dispara recálculo de previsões (RF-012-A3). Faixa com início após o fim ou implausível causa `400` (D-21).
+      x-rf: [RF-014, RF-012]
+      x-roles: [Owner, Caregiver]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SleepPreferencesInput' }
+            examples:
+              default: { value: { target_nap_count: 3, bedtime_from: '19:30', bedtime_to: '20:30' } }
+      responses:
+        '200':
+          description: Preferências salvas.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SleepPreferences' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+    delete:
+      tags: [Sleep]
+      operationId: resetSleepPreferences
+      summary: Remover preferências (volta ao padrão por idade)
+      x-rf: [RF-014]
+      x-roles: [Owner, Caregiver]
+      responses:
+        '204': { description: Removidas. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ----------------------------------------------------------------- CHARTS
+  /babies/{baby_id}/aggregates:
+    parameters:
+      - $ref: '#/components/parameters/BabyId'
+    get:
+      tags: [Charts]
+      operationId: getAggregates
+      summary: Agregações para gráficos de sono, alimentação, fralda e pumping
+      description: |
+        Por `period`: `DAY` (buckets por hora), `WEEK` e `MONTH` (buckets por dia), ancorado em `anchor_date`
+        (data civil no fuso do bebê; padrão: hoje). Inclui média do período e comparação **somente com o
+        período anterior do mesmo bebê** (RB-013); nunca ranking nem percentil. Período sem dado: `buckets`
+        vazios e `data_sufficiency.sufficient=false`, não zeros enganosos (RF-028-A2). Alvo p95 < 500 ms.
+        Atribuição de sessões que cruzam a meia-noite segue D-13.
+
+        `night_awakenings` e `night_awakenings_avg` são **derivados** dos `WakeEvent` (nunca gravados):
+        `null` = dados insuficientes (acompanhamento abaixo do critério de `/reference-data`
+        `limits.night_awakenings_min_session_minutes`); `0` = acompanhamento suficiente e nenhum despertar;
+        `N>0` = quantidade de despertares.
+      x-rf: [RF-028, RF-029, RF-010]
+      x-roles: [Owner, Caregiver, ReadOnly]
+      parameters:
+        - name: period
+          in: query
+          required: true
+          schema: { type: string, enum: [DAY, WEEK, MONTH] }
+        - name: anchor_date
+          in: query
+          schema: { type: string, format: date }
+        - name: include
+          in: query
+          description: Domínios desejados; padrão todos.
+          schema:
+            type: array
+            items: { type: string, enum: [SLEEP, FEEDING, PUMPING, DIAPERS] }
+          style: form
+          explode: false
+      responses:
+        '200':
+          description: Agregações.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AggregatesResponse' }
+              examples:
+                week:
+                  value:
+                    baby_id: 7d0a5c9e-1c0b-4d3a-b5f4-2f9d0e6a8b21
+                    period: WEEK
+                    range: { from: '2026-10-05', to: '2026-10-11' }
+                    tz: America/Sao_Paulo
+                    granularity: DAY
+                    generated_at: '2026-10-08T18:00:00Z'
+                    buckets:
+                      - local_date: '2026-10-05'
+                        start_at: '2026-10-05T03:00:00Z'
+                        sleep: { total_minutes: 820, night_minutes: 610, nap_minutes: 210, nap_count: 3, night_awakenings: 2 }
+                        feeding: { breast_count: 4, breast_minutes: 62, bottle_count: 3, bottle_volume_ml: 450 }
+                        pumping: { count: 0, minutes: 0, volume_ml: 0 }
+                        diapers: { count: 6, by_type: { WET: 4, DIRTY: 2 } }
+                    summary: { days_counted: 3, sleep_total_minutes_avg: 805, nap_count_avg: 3, night_awakenings_avg: 1.5, feeding_count_avg: 7, diaper_count_avg: 6 }
+                    comparison:
+                      kind: OWN_HISTORY
+                      previous_range: { from: '2026-09-28', to: '2026-10-04' }
+                      deltas: { sleep_total_minutes_avg: 15, nap_count_avg: -1 }
+                    data_sufficiency: { sufficient: true, days_with_data: 3, min_days_required: 3 }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------- NOTIFICATIONS
+  /babies/{baby_id}/notification-preferences:
+    parameters:
+      - $ref: '#/components/parameters/BabyId'
+    get:
+      tags: [Notifications]
+      operationId: getNotificationPreferences
+      summary: Preferências de notificação do usuário para o bebê
+      description: Por usuário e bebê (RF-037-A1, RF-038-A6); um cuidador não altera as do outro. A categoria `SYSTEM` é sempre ativa.
+      x-rf: [RF-037, RF-038, RF-040]
+      x-roles: [Owner, Caregiver, ReadOnly]
+      responses:
+        '200':
+          description: Preferências.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationSettings' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Notifications]
+      operationId: putNotificationPreferences
+      summary: Salvar preferências de notificação
+      description: |
+        Substitui o conjunto das categorias enviadas. Mudanças recalculam/cancelam jobs agendados (INV-24).
+        `DEVELOPMENT_PHASE` é aceita mas não gera envio no MVP (D-10). Quiet hours cruzando a meia-noite são válidas.
+      x-rf: [RF-037, RF-038, RF-040]
+      x-roles: [Owner, Caregiver, ReadOnly]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationSettingsInput' }
+            examples:
+              default:
+                value:
+                  hide_baby_name_in_push: true
+                  categories:
+                    - { category: NAP, enabled: true, lead_time_minutes: 10, quiet_hours_start: '22:00', quiet_hours_end: '06:00' }
+                    - { category: BEDTIME, enabled: true, lead_time_minutes: 15, quiet_hours_start: null, quiet_hours_end: null }
+      responses:
+        '200':
+          description: Preferências salvas.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationSettings' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------- SUBSCRIPTIONS
+  /me/entitlements:
+    get:
+      tags: [Subscriptions]
+      operationId: getEntitlements
+      summary: Entitlement efetivo e feature flags
+      description: |
+        Calculado no servidor (RB-009); o cliente nunca decide. Toda funcionalidade que possa ser premium
+        tem um gate bloqueado por padrão, liberado por flags no banco (ADR-0005). O app guarda em cache até
+        `cache_expires_at` para uso offline (D-31). Recursos desconhecidos pelo cliente devem ser tratados como bloqueados.
+      x-rf: [RF-041, RF-043]
+      x-roles: [Any]
+      responses:
+        '200':
+          description: Entitlement.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Entitlement' }
+              examples:
+                free:
+                  value:
+                    plan: FREE
+                    status: NONE
+                    source: NONE
+                    valid_until: null
+                    fetched_at: '2026-10-08T18:00:00Z'
+                    cache_expires_at: '2026-10-09T18:00:00Z'
+                    features:
+                      - { key: tracking.basic, enabled: true }
+                      - { key: charts.month, enabled: false, reason: PREMIUM_REQUIRED }
+                    seats: null
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /subscriptions/purchases:
+    post:
+      tags: [Subscriptions]
+      operationId: submitPurchase
+      summary: Enviar compra da loja para validação
+      description: |
+        O backend valida com Apple/Google e só então ativa o entitlement (RF-042-A1). Recibo inválido, adulterado
+        ou vinculado a outra conta: `409 PURCHASE_CONFLICT` sem conceder nada. Compra pendente (aprovação familiar
+        da loja): `202` com `status=PENDING`. Idempotente por `Idempotency-Key` e por transação.
+      x-rf: [RF-041, RF-042]
+      x-roles: [Any]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PurchaseRequest' }
+      responses:
+        '200':
+          description: Compra validada; entitlement vigente.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Entitlement' }
+        '202':
+          description: Validação pendente; o cliente consulta `/me/entitlements`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Entitlement' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/IdempotencyKeyReuse' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /subscriptions/restore:
+    post:
+      tags: [Subscriptions]
+      operationId: restorePurchases
+      summary: Restaurar compras em novo dispositivo
+      description: Reaproveita a Subscription existente sem nova cobrança (INV-26). Uma compra de loja não vincula duas contas (RF-042-A6).
+      x-rf: [RF-042]
+      x-roles: [Any]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RestoreRequest' }
+      responses:
+        '200':
+          description: Entitlement após restauração.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Entitlement' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /subscriptions/family-seat:
+    put:
+      tags: [Subscriptions]
+      operationId: assignFamilySeat
+      summary: Atribuir o assento premium a um cuidador (PROPOSTA)
+      description: |
+        **Proposta sujeita a D-04/ADR-0005.** Plano premium por família: titular + 1 membro adicional.
+        Por ADR-0009 (decisão 7) o **adicional não precisa ser cuidador ativo do bebê**: o Owner informa um
+        `membership_id` de cuidador existente **ou** um `email` (a pessoa recebe o assento ao entrar/cadastrar-se
+        com esse e-mail verificado, sem vínculo com bebê). Informar exatamente um dos dois. Revogar ou remover
+        um cuidador **não** remove o assento; só `DELETE /subscriptions/family-seat` (ou o fim da assinatura) o faz.
+      x-rf: [RF-043]
+      x-roles: [Owner]
+      x-status: proposed
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Exatamente um entre `membership_id` e `email`.
+              properties:
+                membership_id:
+                  type: string
+                  format: uuid
+                  description: Cuidador existente (opcional; o adicional pode não ser cuidador).
+                email:
+                  type: string
+                  format: email
+                  description: E-mail do adicional, que não precisa ser cuidador de nenhum bebê.
+              oneOf:
+                - required: [membership_id]
+                - required: [email]
+              additionalProperties: false
+      responses:
+        '200':
+          description: Assento atribuído.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Entitlement' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Subscriptions]
+      operationId: releaseFamilySeat
+      summary: Liberar o assento premium (PROPOSTA)
+      x-rf: [RF-043]
+      x-roles: [Owner]
+      x-status: proposed
+      responses:
+        '204': { description: Assento liberado. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- PRIVACY
+  /legal/documents:
+    get:
+      tags: [Privacy]
+      operationId: listLegalDocuments
+      summary: Versões vigentes de Termos e Política
+      security: []
+      x-rf: [RF-003, RF-040]
+      responses:
+        '200':
+          description: Documentos vigentes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/LegalDocument' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /me/consents:
+    get:
+      tags: [Privacy]
+      operationId: listConsents
+      summary: Consultar consentimentos
+      description: |
+        Estado corrente por finalidade, mais `pending_required` (documentos com nova versão exigindo novo aceite, RF-003-A2).
+        Com `include_history=true`, devolve também o histórico append-only (INV-27). O servidor é a fonte da verdade.
+      x-rf: [RF-003, RF-040]
+      x-roles: [Any]
+      parameters:
+        - name: include_history
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Consentimentos.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsentsResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Privacy]
+      operationId: recordConsent
+      summary: Conceder ou revogar consentimento
+      description: |
+        Acrescenta um ConsentRecord (append-only). Revogar `analytics_product` interrompe o envio imediatamente (RF-040-A3).
+        Finalidades opcionais são separadas do aceite de Termos (RF-003-A5). Gera AuditEvent.
+      x-rf: [RF-003, RF-040, RF-055]
+      x-roles: [Any]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConsentInput' }
+            examples:
+              revoke: { value: { purpose_key: ANALYTICS_PRODUCT, document_version: 1.0.0, status: REVOKED, source: SETTINGS } }
+      responses:
+        '201':
+          description: Registro criado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsentRecord' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /me/data-exports:
+    get:
+      tags: [Privacy]
+      operationId: listDataExports
+      summary: Listar pedidos de exportação
+      x-rf: [RF-044]
+      x-roles: [Any]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/PageToken'
+      responses:
+        '200':
+          description: Pedidos.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/DataExport' }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Privacy]
+      operationId: requestDataExport
+      summary: Solicitar exportação dos dados pessoais
+      description: |
+        Assíncrono (RF-044-A1): `202` e aviso (push e e-mail) quando pronto. Escopo: conta, consentimentos, bebês de que
+        é Owner (ou os escolhidos em `baby_ids`), eventos, preferências, vínculos; inclui timestamps UTC, fuso e
+        `schema_version` (RB-014). Disponível a qualquer plano. Exige `X-Reauth-Token` apenas no download.
+        Escopo de dados de outros cuidadores: D-33.
+      x-rf: [RF-044, RF-055]
+      x-roles: [Any]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DataExportRequest' }
+      responses:
+        '202':
+          description: Pedido aceito.
+          headers:
+            Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' }
+            Location:
+              description: URL do pedido.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataExport' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/IdempotencyKeyReuse' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /me/data-exports/{export_id}:
+    parameters:
+      - $ref: '#/components/parameters/ExportId'
+    get:
+      tags: [Privacy]
+      operationId: getDataExport
+      summary: Consultar pedido de exportação
+      x-rf: [RF-044]
+      x-roles: [Any]
+      responses:
+        '200':
+          description: Pedido.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DataExport' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /me/data-exports/{export_id}/download-links:
+    parameters:
+      - $ref: '#/components/parameters/ExportId'
+    post:
+      tags: [Privacy]
+      operationId: createExportDownloadLink
+      summary: Gerar link assinado de download
+      description: 'Exige `X-Reauth-Token`. URL de curta duração e uso único, acessível só ao titular (RF-044-A4). Pedido ainda em processamento: `409`.'
+      x-rf: [RF-044, RF-055]
+      x-roles: [Any]
+      parameters:
+        - $ref: '#/components/parameters/ReauthToken'
+      responses:
+        '201':
+          description: Link.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, expires_at]
+                properties:
+                  url: { type: string, format: uri }
+                  expires_at: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /me/deletion-request:
+    get:
+      tags: [Privacy]
+      operationId: getAccountDeletion
+      summary: Consultar pedido de exclusão de conta
+      description: Devolve `status`, `requested_at` e `scheduled_for` (fim da janela de arrependimento) do pedido vigente.
+      x-rf: [RF-045]
+      x-roles: [Any]
+      responses:
+        '200':
+          description: Pedido vigente.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountDeletion' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Privacy]
+      operationId: requestAccountDeletion
+      summary: Solicitar exclusão da conta e dos dados
+      description: |
+        **Somente o Owner ativo de um bebê** pode excluir a conta (ADR-0009, decisão 6; ADR-0010, decisão 3).
+        Qualquer outro usuário (Caregiver, ReadOnly ou sem vínculo ativo de Owner) recebe `403 FORBIDDEN_ROLE`,
+        com `privacy_request_path=/me/privacy-requests` indicando o caminho para exercer os direitos do titular sobre
+        os **próprios dados pessoais** sem apagar dados do bebê. Exige `X-Reauth-Token`. Encerra todas as sessões
+        e agenda a purga ao fim da **janela de arrependimento de `policies.deletion_grace_days` dias (padrão 7)**:
+        `AccountDeletion.scheduled_for = requested_at + deletion_grace_days`. Cancelável com
+        `DELETE /me/deletion-request` até `scheduled_for`; o servidor não executa a exclusão antes disso.
+
+        A política vem da flag `account_deletion_policy` (`GET /reference-data` -> `policies`) e é devolvida em
+        `AccountDeletion.policy`:
+        - `CASCADE` (**padrão**, ADR-0009 substitui o `BLOCK` inicial): apaga os bebês do Owner **também para os
+          demais cuidadores**. Se houver outros cuidadores ativos, a requisição exige confirmação explícita
+          `acknowledge_other_caregivers=true` (a UI informa que os dados do bebê serão apagados para todos); sem ela
+          responde `409 OWNER_DECISION_REQUIRED` com `deletion_policy` e `babies_requiring_decision`.
+        - `BLOCK`: responde `409 OWNER_DECISION_REQUIRED` enquanto houver bebê com outros cuidadores ativos, até
+          o Owner transferir a propriedade ou excluir o bebê.
+        - `TRANSFER_OWNERSHIP`: `baby_decisions` com `action=TRANSFER_OWNERSHIP` e `new_owner_membership_id` para
+          cada bebê compartilhado.
+        Validação jurídica pendente (DJ-09). Não cancela assinatura da loja.
+      x-rf: [RF-045, RF-055]
+      x-roles: [Owner]
+      parameters:
+        - $ref: '#/components/parameters/ReauthToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccountDeletionRequest' }
+            examples:
+              cascade:
+                value: { confirm: true, acknowledge_store_subscription: true, acknowledge_other_caregivers: true }
+      responses:
+        '202':
+          description: Exclusão agendada para o fim da janela de arrependimento (`scheduled_for`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountDeletion' }
+              examples:
+                scheduled:
+                  value:
+                    id: 8a1f0c2e-3b4d-4e5f-9a6b-7c8d9e0f1a2b
+                    status: SCHEDULED
+                    policy: CASCADE
+                    requested_at: '2026-10-08T18:00:00Z'
+                    grace_days: 7
+                    scheduled_for: '2026-10-15T18:00:00Z'
+                    completed_at: null
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: |
+            Usuário que **não é Owner ativo de um bebê** (`FORBIDDEN_ROLE`), ou reautenticação ausente/expirada
+            (`REAUTH_REQUIRED` é `401`). Para quem não é Owner, a resposta traz `privacy_request_path`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                notOwner:
+                  value:
+                    type: https://api.nina.app/problems/forbidden-role
+                    title: Only an active Owner of a baby can delete the account
+                    status: 403
+                    code: FORBIDDEN_ROLE
+                    privacy_request_path: /me/privacy-requests
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/IdempotencyKeyReuse' }
+    delete:
+      tags: [Privacy]
+      operationId: cancelAccountDeletion
+      summary: Cancelar exclusão dentro da janela de arrependimento
+      description: |
+        Janela de arrependimento de `policies.deletion_grace_days` dias (padrão 7; ADR-0009 decisão 4, ADR-0010 decisão 6).
+        O usuário entra de novo (login) e cancela antes de `scheduled_for`; depois disso responde `409 DELETION_NOT_CANCELLABLE`.
+      x-rf: [RF-045]
+      x-roles: [Any]
+      responses:
+        '204': { description: Cancelada. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /me/privacy-requests:
+    get:
+      tags: [Privacy]
+      operationId: listPrivacyRequests
+      summary: Listar requisições de privacidade do titular
+      description: Requisições do próprio usuário (qualquer papel), mais recentes primeiro.
+      x-rf: [RF-044, RF-045, RF-055]
+      x-roles: [Any]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/PageToken'
+      responses:
+        '200':
+          description: Requisições.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/PrivacyRequest' }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Privacy]
+      operationId: createPrivacyRequest
+      summary: Requisitar direito do titular sobre os próprios dados pessoais
+      description: |
+        Caminho **separado** da exclusão de conta (ADR-0010, decisão 3) para cumprir a LGPD (art. 18) quando o titular
+        **não é Owner ativo de um bebê** (Caregiver, ReadOnly ou sem vínculo). Também está disponível ao Owner para
+        `ACCESS`, `CORRECTION` e `EXPORT`. O escopo é sempre o dos **dados pessoais do próprio usuário** (conta,
+        sessões, consentimentos, tokens e a atribuição de autoria dos eventos que registrou); **nunca apaga dados
+        do bebê**, que pertencem ao Owner.
+
+        Tipos (`type`):
+        - `ACCESS`: acesso/confirmação dos dados; gera um `DataExport` de escopo `PERSONAL_ONLY`
+          (`data_export_id`), baixado por `POST /me/data-exports/{export_id}/download-links`.
+        - `EXPORT`: portabilidade; igual a `ACCESS`, mas no formato pedido em `format`. Equivale a
+          `POST /me/data-exports` com `scope=PERSONAL_ONLY`.
+        - `CORRECTION`: correção de dado pessoal. Os campos editáveis continuam em `PATCH /me` e
+          `POST /me/email-changes`; esta requisição registra pedidos que o app não cobre, descritos em `note`.
+        - `ANONYMIZATION`: eliminação/anonimização dos próprios dados pessoais (conta, sessões, tokens de push,
+          identidades e consentimentos não exigidos por obrigação legal). Encerra os vínculos com bebês
+          (o usuário sai de todos) e **anonimiza a atribuição de autoria** nos eventos que registrou, que permanecem
+          para os demais cuidadores. Aplica a mesma janela de arrependimento da exclusão
+          (`policies.deletion_grace_days`): `scheduled_for`, cancelável em `DELETE /me/privacy-requests/{request_id}`.
+          Para um **Owner ativo**, responde `409 ACCOUNT_DELETION_REQUIRED` (usar `/me/deletion-request`).
+
+        Exige `X-Reauth-Token` (verificação de identidade, privacy-security-spec 5). Status e prazo: `status`,
+        `acknowledged_at` e `due_at` (`requested_at` + `policies.privacy_request_sla_days`, padrão 15 dias; confirmação
+        em até `policies.privacy_request_ack_hours`, padrão 48 h). Prazos propostos, **a validar pelo jurídico
+        (DJ-07/DJ-09)**. Uma requisição aberta do mesmo tipo responde `409 PRIVACY_REQUEST_OPEN`.
+      x-rf: [RF-044, RF-045, RF-055]
+      x-roles: [Any]
+      parameters:
+        - $ref: '#/components/parameters/ReauthToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrivacyRequestCreate' }
+            examples:
+              anonymization:
+                summary: Caregiver pede a anonimização dos próprios dados
+                value: { type: ANONYMIZATION, confirm: true }
+              access:
+                value: { type: ACCESS }
+      responses:
+        '202':
+          description: Requisição registrada.
+          headers:
+            Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' }
+            Location:
+              description: URL da requisição.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrivacyRequest' }
+              examples:
+                anonymization:
+                  value:
+                    id: 2f6c1d3e-4a5b-4c6d-8e7f-9a0b1c2d3e4f
+                    type: ANONYMIZATION
+                    status: SCHEDULED
+                    requested_at: '2026-10-08T18:00:00Z'
+                    acknowledged_at: '2026-10-08T18:00:01Z'
+                    due_at: '2026-10-23T18:00:00Z'
+                    scheduled_for: '2026-10-15T18:00:00Z'
+                    completed_at: null
+                    data_export_id: null
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/IdempotencyKeyReuse' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /me/privacy-requests/{request_id}:
+    parameters:
+      - $ref: '#/components/parameters/PrivacyRequestId'
+    get:
+      tags: [Privacy]
+      operationId: getPrivacyRequest
+      summary: Consultar status e prazo de uma requisição de privacidade
+      x-rf: [RF-044, RF-045]
+      x-roles: [Any]
+      responses:
+        '200':
+          description: Requisição.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrivacyRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Privacy]
+      operationId: cancelPrivacyRequest
+      summary: Cancelar requisição ainda não executada
+      description: |
+        Cancela uma requisição `ANONYMIZATION` dentro da janela de arrependimento (antes de `scheduled_for`) ou
+        qualquer requisição ainda em `REQUESTED`. Fora disso, `409 PRIVACY_REQUEST_NOT_CANCELLABLE`.
+      x-rf: [RF-045]
+      x-roles: [Any]
+      responses:
+        '204': { description: Cancelada. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /me/audit-events:
+    get:
+      tags: [Privacy]
+      operationId: listMyAuditEvents
+      summary: Auditoria dos eventos da própria conta
+      description: Somente leitura; sem PII nem conteúdo livre (INV-28).
+      x-rf: [RF-055]
+      x-roles: [Any]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/PageToken'
+      responses:
+        '200':
+          description: Eventos, mais recentes primeiro.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditEventPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /babies/{baby_id}/audit-events:
+    parameters:
+      - $ref: '#/components/parameters/BabyId'
+    get:
+      tags: [Privacy]
+      operationId: listBabyAuditEvents
+      summary: Atividade de acesso do bebê (convites, aceites, remoções)
+      x-rf: [RF-055, RF-020]
+      x-roles: [Owner]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/PageToken'
+      responses:
+        '200':
+          description: Eventos.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditEventPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # -------------------------------------------------------------- REFERENCE
+  /reference-data:
+    get:
+      tags: [Reference]
+      operationId: getReferenceData
+      summary: Valores permitidos e limites configuráveis
+      description: |
+        Conjuntos de valores (tipos de fralda, tipos de leite, métodos/locais de sono) e limites de validação
+        (volume máximo, tamanho de notas) vindos de configuração em banco (ADR-0005; D-08, D-22). Expõe também as
+        **políticas por flag** (`policies`: sono sobreposto, exclusão de conta, janela de arrependimento `deletion_grace_days`, janela de idade corrigida, prazos de privacidade). O cliente
+        usa para montar a UI e validar localmente; o servidor valida sempre. Os enums de fralda, alimentação e leite
+        são extensíveis: ignorar valores desconhecidos. Cacheável por `ETag`.
+      x-rf: [RF-016, RF-018, RF-008]
+      x-roles: [Any]
+      responses:
+        '200':
+          description: Dados de referência.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Cache-Control:
+              description: 'Ex.: private, max-age=3600'
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReferenceData' }
+              examples:
+                default:
+                  value:
+                    version: '2026.10.1'
+                    diaper_types: [WET, DIRTY, MIXED, DRY, UNSPECIFIED]
+                    feeding_types: [BREASTFEEDING, BOTTLE, SOLID, OTHER]
+                    milk_types: [BREAST_MILK, FORMULA, MIXED, OTHER, UNSPECIFIED]
+                    sleep_methods: [CRIB, LAP, STROLLER]
+                    policies:
+                      sleep_overlap_policy: ACCEPT_AND_WARN
+                      account_deletion_policy: CASCADE
+                      deletion_grace_days: 7
+                      corrected_age_max_months: 24
+                      privacy_request_sla_days: 15
+                      privacy_request_ack_hours: 48
+                    limits:
+                      night_awakenings_min_session_minutes: 240
+                      bottle_volume_ml_max: 500
+                      pumping_volume_ml_max: 500
+                      notes_max_length: 500
+                      sync_max_mutations_per_push: 100
+                      sync_tombstone_retention_days: 90
+                      invitation_ttl_days: 7
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+# ===================================================================
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token de até 15 minutos. Obtido em login/refresh. Nunca em URL nem em log.
+
+  headers:
+    ETag:
+      description: Versão da representação (`"<version>"`). Usar em `If-Match`.
+      schema: { type: string }
+    IdempotentReplayed:
+      description: '`true` se a resposta é reprodução de uma requisição anterior com a mesma `Idempotency-Key`.'
+      schema: { type: boolean }
+    RetryAfter:
+      description: Segundos até nova tentativa.
+      schema: { type: integer, minimum: 0 }
+
+  parameters:
+    BabyId:
+      name: baby_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    MembershipId:
+      name: membership_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    EventId:
+      name: event_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ExportId:
+      name: export_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PrivacyRequestId:
+      name: request_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    DeviceId:
+      name: device_id
+      in: path
+      required: true
+      description: UUID do dispositivo gerado no cliente e informado no login.
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    PageToken:
+      name: page_token
+      in: query
+      description: Token opaco de paginação devolvido em `page.next_page_token`.
+      schema: { type: string, maxLength: 512 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        UUID gerado pelo cliente. O servidor guarda a resposta por 24 h; repetição com o mesmo corpo devolve a
+        resposta original (`Idempotent-Replayed: true`); corpo diferente gera `422 IDEMPOTENCY_KEY_REUSE`.
+      schema: { type: string, format: uuid }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: '`"<version>"` conhecida pelo cliente. Divergência gera `412 VERSION_CONFLICT`.'
+      schema: { type: string }
+    ReauthToken:
+      name: X-Reauth-Token
+      in: header
+      required: true
+      description: Token de `/auth/reauthenticate` (curta duração).
+      schema: { type: string }
+
+  responses:
+    ValidationError:
+      description: Requisição inválida.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            validation:
+              value:
+                type: https://api.nina.app/problems/validation-failed
+                title: Validation failed
+                status: 400
+                code: VALIDATION_FAILED
+                request_id: 01J9Z3Q8M2T6V4X1B7N5C0D8EF
+                errors:
+                  - { field: data.end_at, code: END_BEFORE_START }
+    Unauthorized:
+      description: Não autenticado, token expirado, sessão revogada ou credencial inválida.
+      headers:
+        WWW-Authenticate:
+          description: 'Ex.: Bearer error="invalid_token"'
+          schema: { type: string }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            expired:
+              value:
+                type: https://api.nina.app/problems/token-expired
+                title: Access token expired
+                status: 401
+                code: TOKEN_EXPIRED
+            revoked:
+              value:
+                type: https://api.nina.app/problems/session-revoked
+                title: Session revoked
+                status: 401
+                code: SESSION_REVOKED
+            invalidCredentials:
+              value:
+                type: https://api.nina.app/problems/invalid-credentials
+                title: Invalid credentials
+                status: 401
+                code: INVALID_CREDENTIALS
+    Forbidden:
+      description: Papel insuficiente, vínculo revogado, consentimento ou reautenticação exigidos.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            role:
+              value:
+                type: https://api.nina.app/problems/forbidden-role
+                title: Role not allowed
+                status: 403
+                code: FORBIDDEN_ROLE
+            revoked:
+              value:
+                type: https://api.nina.app/problems/access-revoked
+                title: Access revoked
+                status: 403
+                code: ACCESS_REVOKED
+            consent:
+              value:
+                type: https://api.nina.app/problems/consent-required
+                title: Consent required
+                status: 403
+                code: CONSENT_REQUIRED
+                required_consents:
+                  - { purpose_key: TERMS_OF_USE, document_version: 1.0.0 }
+    NotFound:
+      description: Recurso inexistente **ou** sem vínculo do usuário (resposta uniforme, sem revelar existência).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            default:
+              value:
+                type: https://api.nina.app/problems/not-found
+                title: Not found
+                status: 404
+                code: NOT_FOUND
+    Conflict:
+      description: Conflito de estado.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            identityLink:
+              value:
+                type: https://api.nina.app/problems/identity-link-required
+                title: Sign in with your original method and link this identity
+                status: 409
+                code: IDENTITY_LINK_REQUIRED
+            ownerDecision:
+              value:
+                type: https://api.nina.app/problems/owner-decision-required
+                title: Decide the destination of shared babies
+                status: 409
+                code: OWNER_DECISION_REQUIRED
+                deletion_policy: CASCADE
+                babies_requiring_decision:
+                  - 7d0a5c9e-1c0b-4d3a-b5f4-2f9d0e6a8b21
+            alreadyMember:
+              value:
+                type: https://api.nina.app/problems/already-member
+                title: Already a member
+                status: 409
+                code: ALREADY_MEMBER
+            accountDeletionRequired:
+              value:
+                type: https://api.nina.app/problems/account-deletion-required
+                title: Active Owners must use account deletion
+                status: 409
+                code: ACCOUNT_DELETION_REQUIRED
+            privacyRequestOpen:
+              value:
+                type: https://api.nina.app/problems/privacy-request-open
+                title: A request of this type is already open
+                status: 409
+                code: PRIVACY_REQUEST_OPEN
+    PreconditionFailed:
+      description: '`If-Match` não corresponde à versão atual.'
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            default:
+              value:
+                type: https://api.nina.app/problems/version-conflict
+                title: Version conflict
+                status: 412
+                code: VERSION_CONFLICT
+    IdempotencyKeyReuse:
+      description: '`Idempotency-Key` reutilizada com corpo diferente.'
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            default:
+              value:
+                type: https://api.nina.app/problems/idempotency-key-reuse
+                title: Idempotency key reused with a different payload
+                status: 422
+                code: IDEMPOTENCY_KEY_REUSE
+    PayloadTooLarge:
+      description: Lote ou corpo acima do limite (100 mutações / 256 KiB).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            default:
+              value:
+                type: https://api.nina.app/problems/payload-too-large
+                title: Payload too large
+                status: 413
+                code: PAYLOAD_TOO_LARGE
+    UpgradeRequired:
+      description: Versão do app abaixo do mínimo suportado.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            default:
+              value:
+                type: https://api.nina.app/problems/client-upgrade-required
+                title: Client upgrade required
+                status: 426
+                code: CLIENT_UPGRADE_REQUIRED
+    TooManyRequests:
+      description: Limite de taxa excedido.
+      headers:
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            default:
+              value:
+                type: https://api.nina.app/problems/rate-limited
+                title: Too many requests
+                status: 429
+                code: RATE_LIMITED
+    CursorExpired:
+      description: Cursor expirado (> 90 dias) ou inválido; resync completo obrigatório.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          examples:
+            expired:
+              value:
+                type: https://api.nina.app/problems/sync-cursor-expired
+                title: Sync cursor expired
+                status: 410
+                code: SYNC_CURSOR_EXPIRED
+                reason: EXPIRED
+                resync_required: true
+                request_id: 01J9Z3Q8M2T6V4X1B7N5C0D8EF
+
+  schemas:
+    # ------------------------------------------------------------ common
+    Problem:
+      type: object
+      description: RFC 7807 com extensões. `code` é estável e é a chave de localização no cliente.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: 'URI estável por classe de erro (https://api.nina.app/problems/<slug>).'
+        title:
+          type: string
+          description: Resumo curto em inglês, não localizado.
+        status: { type: integer, minimum: 400, maximum: 599 }
+        detail:
+          type: string
+          description: Sem PII nem dados do bebê.
+        instance:
+          type: string
+          description: Identificador da ocorrência.
+        code:
+          type: string
+          description: 'Código estável em UPPER_SNAKE_CASE.'
+          examples: [VALIDATION_FAILED]
+        request_id:
+          type: string
+          description: Correlação com logs (também em `X-Request-Id`).
+        errors:
+          type: array
+          items: { $ref: '#/components/schemas/FieldError' }
+        retry_after_seconds: { type: integer, minimum: 0 }
+        resync_required:
+          type: boolean
+          description: 'Presente em `SYNC_CURSOR_EXPIRED`.'
+        reason:
+          type: string
+          description: 'Subtipo do erro (ex.: `EXPIRED` ou `INVALID` em cursor).'
+        required_consents:
+          type: array
+          items: { $ref: '#/components/schemas/ConsentAcceptance' }
+        babies_requiring_decision:
+          type: array
+          items: { type: string, format: uuid }
+        deletion_policy:
+          type: string
+          enum: [CASCADE, BLOCK, TRANSFER_OWNERSHIP]
+          description: Política de exclusão vigente em `OWNER_DECISION_REQUIRED`.
+        privacy_request_path:
+          type: string
+          description: 'Presente em `FORBIDDEN_ROLE` na exclusão de conta de quem não é Owner: caminho para exercer os direitos do titular (`/me/privacy-requests`).'
+      additionalProperties: true
+    FieldError:
+      type: object
+      required: [field, code]
+      properties:
+        field:
+          type: string
+          description: 'Caminho JSON do campo (ex.: `data.volume_ml`).'
+        code:
+          type: string
+          description: 'Ex.: REQUIRED, OUT_OF_RANGE, END_BEFORE_START.'
+        meta: { type: object, additionalProperties: true }
+    PageInfo:
+      type: object
+      required: [has_more, next_page_token]
+      properties:
+        has_more: { type: boolean }
+        next_page_token: { type: [string, 'null'], maxLength: 512 }
+    UserRef:
+      type: object
+      description: Autoria exibível a outros cuidadores (sem e-mail).
+      required: [id, display_name]
+      properties:
+        id: { type: string, format: uuid }
+        display_name: { type: string }
+    Role:
+      type: string
+      enum: [OWNER, CAREGIVER, READ_ONLY]
+    InvitableRole:
+      type: string
+      enum: [CAREGIVER, READ_ONLY]
+    IdentityProvider:
+      type: string
+      enum: [GOOGLE, APPLE]
+
+    # -------------------------------------------------------------- auth
+    DeviceInfo:
+      type: object
+      required: [device_id, platform]
+      properties:
+        device_id:
+          type: string
+          format: uuid
+          description: Gerado no primeiro uso; estável por instalação.
+        platform: { type: string, enum: [IOS, ANDROID] }
+        device_label:
+          type: string
+          maxLength: 80
+          description: 'Ex.: modelo exibido (sem identificadores únicos de hardware).'
+        app_version: { type: string, maxLength: 32 }
+        os_version: { type: string, maxLength: 32 }
+    ConsentAcceptance:
+      type: object
+      required: [purpose_key, document_version]
+      properties:
+        purpose_key: { $ref: '#/components/schemas/PurposeKey' }
+        document_version:
+          type: string
+          examples: ['1.0.0']
+    RegisterRequest:
+      type: object
+      required: [email, password, locale, consents]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password:
+          type: string
+          format: password
+          writeOnly: true
+          description: Política em D-16.
+        display_name: { type: string, maxLength: 80 }
+        locale:
+          type: string
+          examples: [pt-BR]
+        timezone:
+          type: string
+          description: IANA.
+          examples: [America/Sao_Paulo]
+        consents:
+          type: array
+          minItems: 2
+          items: { $ref: '#/components/schemas/ConsentAcceptance' }
+    VerificationPending:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: VERIFICATION_PENDING
+        resend_after_seconds: { type: integer }
+    EmailVerifyRequest:
+      type: object
+      required: [email, code, device]
+      properties:
+        email: { type: string, format: email }
+        code: { type: string, writeOnly: true }
+        device: { $ref: '#/components/schemas/DeviceInfo' }
+    LoginRequest:
+      type: object
+      required: [email, password, device]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password, writeOnly: true }
+        device: { $ref: '#/components/schemas/DeviceInfo' }
+    SocialLoginRequest:
+      type: object
+      required: [id_token, nonce, device]
+      properties:
+        id_token: { type: string, writeOnly: true }
+        nonce:
+          type: string
+          description: Valor aleatório enviado ao provedor; o servidor confere o hash no token.
+        device: { $ref: '#/components/schemas/DeviceInfo' }
+        given_name: { type: string, maxLength: 80 }
+        family_name: { type: string, maxLength: 80 }
+        locale: { type: string }
+        timezone: { type: string }
+        consents:
+          type: array
+          description: Obrigatório se a conta ainda não existe.
+          items: { $ref: '#/components/schemas/ConsentAcceptance' }
+    RefreshRequest:
+      type: object
+      required: [refresh_token, device_id]
+      properties:
+        refresh_token: { type: string, writeOnly: true }
+        device_id: { type: string, format: uuid }
+    TokenResponse:
+      type: object
+      required: [token_type, access_token, expires_in, refresh_token, refresh_expires_at, session_id, user]
+      properties:
+        token_type:
+          type: string
+          const: Bearer
+        access_token: { type: string }
+        expires_in:
+          type: integer
+          description: Segundos de validade do access token (<= 900).
+        refresh_token: { type: string }
+        refresh_expires_at: { type: string, format: date-time }
+        session_id: { type: string, format: uuid }
+        user: { $ref: '#/components/schemas/User' }
+        pending_consents:
+          type: array
+          description: Documentos com nova versão que exigem aceite antes de continuar.
+          items: { $ref: '#/components/schemas/ConsentAcceptance' }
+      examples:
+        - token_type: Bearer
+          access_token: eyJhbGciOi...
+          expires_in: 900
+          refresh_token: rt_5Zk...
+          refresh_expires_at: '2026-11-07T18:00:00Z'
+          session_id: 4a0d6c1e-2b3f-4c5d-8e9f-0a1b2c3d4e5f
+          user:
+            id: 3c1c0d0e-5b61-4d6e-8a3a-0a0c5d1d9f01
+            email: ana@example.org
+            email_verified: true
+            display_name: Ana
+            locale: pt-BR
+            timezone: America/Sao_Paulo
+            status: ACTIVE
+            has_password: true
+            identities: []
+            created_at: '2026-10-08T17:00:00Z'
+    ReauthRequest:
+      type: object
+      description: Informar `password` ou (`provider`, `id_token`, `nonce`).
+      properties:
+        password: { type: string, format: password, writeOnly: true }
+        provider: { $ref: '#/components/schemas/IdentityProvider' }
+        id_token: { type: string, writeOnly: true }
+        nonce: { type: string }
+    ReauthResponse:
+      type: object
+      required: [reauth_token, expires_in]
+      properties:
+        reauth_token: { type: string }
+        expires_in:
+          type: integer
+          description: Segundos (padrão 300).
+    User:
+      type: object
+      required: [id, email, email_verified, locale, status, has_password, identities, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        email_verified: { type: boolean }
+        display_name: { type: [string, 'null'] }
+        locale: { type: string }
+        timezone: { type: [string, 'null'] }
+        status: { type: string, enum: [ACTIVE, PENDING_DELETION] }
+        has_password: { type: boolean }
+        identities:
+          type: array
+          items:
+            type: object
+            required: [provider, linked_at]
+            properties:
+              provider: { $ref: '#/components/schemas/IdentityProvider' }
+              linked_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+    UserUpdate:
+      type: object
+      properties:
+        display_name: { type: string, maxLength: 80 }
+        locale: { type: string }
+        timezone: { type: string }
+      additionalProperties: false
+    Session:
+      type: object
+      required: [id, device_id, platform, created_at, last_seen_at, is_current]
+      properties:
+        id: { type: string, format: uuid }
+        device_id: { type: string, format: uuid }
+        device_label: { type: [string, 'null'] }
+        platform: { type: string, enum: [IOS, ANDROID] }
+        app_version: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        last_seen_at:
+          type: string
+          format: date-time
+          description: Precisão reduzida (aproximada).
+        approx_location:
+          type: [string, 'null']
+          description: Cidade/região aproximada, se disponível.
+        is_current: { type: boolean }
+    PushTokenRegistration:
+      type: object
+      required: [platform, token]
+      properties:
+        platform: { type: string, enum: [APNS, FCM] }
+        token: { type: string, maxLength: 4096, writeOnly: true }
+        environment:
+          type: string
+          enum: [PRODUCTION, SANDBOX]
+          default: PRODUCTION
+          description: Relevante para APNs.
+        app_version: { type: string }
+        locale: { type: string }
+        os_notifications_authorized:
+          type: boolean
+          description: Permissão de notificação do SO no momento.
+    PushToken:
+      type: object
+      required: [device_id, platform, registered_at, updated_at]
+      properties:
+        device_id: { type: string, format: uuid }
+        platform: { type: string, enum: [APNS, FCM] }
+        registered_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    # ------------------------------------------------------------- babies
+    AgeValue:
+      type: object
+      required: [days, weeks, months]
+      properties:
+        days: { type: integer }
+        weeks:
+          type: integer
+          description: Semanas completas.
+        months:
+          type: integer
+          description: Meses completos.
+    AgeCalculation:
+      type: object
+      description: |
+        Cálculo canônico de idade (ADR-0009). Persistem-se apenas `birth_date` e `due_date`; **a idade corrigida
+        nunca é persistida**. `corrected_days = chronological_days - (due_date - birth_date)` somente se
+        `birth_date < due_date` e dentro da janela de aplicação (parâmetro editável em banco, ADR-0005).
+      required: [chronological_days, corrected_days, correction_applied]
+      properties:
+        chronological_days:
+          type: integer
+          minimum: 0
+          description: Dias desde `birth_date` até a data local do bebê.
+        corrected_days:
+          type: [integer, 'null']
+          description: Dias de idade corrigida. `null` = não se aplica (sem `due_date`, `birth_date >= due_date` ou fora da janela); nunca `0` para "não se aplica".
+        correction_applied:
+          type: boolean
+          description: '`true` se e somente se `corrected_days` não é nulo.'
+    Age:
+      type: object
+      description: |
+        Decomposição em semanas e meses para exibição, na data local do bebê, calculada sob demanda e nunca
+        persistida (INV-04, RIC). A fonte canônica em dias é `Baby.age_calculation`; `corrected` é nulo
+        exatamente quando `age_calculation.corrected_days` é nulo.
+      required: [as_of, chronological]
+      properties:
+        as_of: { type: string, format: date }
+        chronological: { $ref: '#/components/schemas/AgeValue' }
+        corrected:
+          description: Nulo = correção não se aplica (ver `AgeCalculation`).
+          oneOf:
+            - $ref: '#/components/schemas/AgeValue'
+            - type: 'null'
+        displayed: { type: string, enum: [CHRONOLOGICAL, CORRECTED] }
+    Baby:
+      type: object
+      required: [id, display_name, birth_date, timezone, my_role, version, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        display_name:
+          type: string
+          maxLength: 60
+          description: Nome ou apelido.
+        birth_date: { type: string, format: date }
+        due_date:
+          type: [string, 'null']
+          format: date
+          description: Campo distinto e independente de `birth_date` (RB-004).
+        sex:
+          type: [string, 'null']
+          enum: [FEMALE, MALE, OTHER, null]
+        timezone:
+          type: string
+          description: IANA.
+        photo_ref:
+          type: [string, 'null']
+          readOnly: true
+          description: Reservado; upload fora do MVP (D-09).
+        my_role: { $ref: '#/components/schemas/Role' }
+        age: { $ref: '#/components/schemas/Age' }
+        age_calculation: { $ref: '#/components/schemas/AgeCalculation' }
+        version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      examples:
+        - id: 7d0a5c9e-1c0b-4d3a-b5f4-2f9d0e6a8b21
+          display_name: Nina
+          birth_date: '2026-01-10'
+          due_date: '2026-01-24'
+          sex: null
+          timezone: America/Sao_Paulo
+          photo_ref: null
+          my_role: OWNER
+          age:
+            as_of: '2026-10-08'
+            chronological: { days: 271, weeks: 38, months: 8 }
+            corrected: { days: 257, weeks: 36, months: 8 }
+            displayed: CHRONOLOGICAL
+          age_calculation: { chronological_days: 271, corrected_days: 257, correction_applied: true }
+          version: 3
+          created_at: '2026-10-08T17:00:00Z'
+          updated_at: '2026-10-08T17:10:00Z'
+    BabyCreate:
+      type: object
+      required: [display_name, birth_date]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Opcional; gerado no cliente.
+        display_name: { type: string, minLength: 1, maxLength: 60 }
+        birth_date:
+          type: string
+          format: date
+          description: Não pode estar no futuro (perfil pré-natal, D-11).
+        due_date: { type: [string, 'null'], format: date }
+        sex:
+          type: [string, 'null']
+          enum: [FEMALE, MALE, OTHER, null]
+        timezone:
+          type: string
+          description: IANA; se omitido, usa o fuso do dispositivo/usuário e o app confirma.
+      additionalProperties: false
+    BabyUpdate:
+      type: object
+      description: Merge-patch; apenas Owner.
+      properties:
+        display_name: { type: string, minLength: 1, maxLength: 60 }
+        birth_date: { type: string, format: date }
+        due_date: { type: [string, 'null'], format: date }
+        sex:
+          type: [string, 'null']
+          enum: [FEMALE, MALE, OTHER, null]
+        timezone: { type: string }
+      additionalProperties: false
+
+    # --------------------------------------------------------- caregivers
+    Membership:
+      type: object
+      required: [id, baby_id, role, status, invited_at]
+      properties:
+        id: { type: string, format: uuid }
+        baby_id: { type: string, format: uuid }
+        user:
+          description: Nulo enquanto o convite não foi aceito.
+          oneOf:
+            - $ref: '#/components/schemas/UserRef'
+            - type: 'null'
+        invited_email:
+          type: [string, 'null']
+          format: email
+          description: Visível apenas ao Owner.
+        role: { $ref: '#/components/schemas/Role' }
+        status: { type: string, enum: [PENDING, ACTIVE, REVOKED, DECLINED, EXPIRED] }
+        invited_at: { type: string, format: date-time }
+        invitation_expires_at: { type: [string, 'null'], format: date-time }
+        accepted_at: { type: [string, 'null'], format: date-time }
+    InvitationCreate:
+      type: object
+      required: [email, role]
+      properties:
+        email: { type: string, format: email }
+        role: { $ref: '#/components/schemas/InvitableRole' }
+      additionalProperties: false
+    InvitationToken:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          writeOnly: true
+          description: Token do link de convite.
+    InvitationPreview:
+      type: object
+      required: [inviter_display_name, baby_label, role, expires_at]
+      properties:
+        inviter_display_name: { type: string }
+        baby_label:
+          type: string
+          description: 'Rótulo reduzido (ex.: inicial/apelido curto); nome completo só após o aceite.'
+        role: { $ref: '#/components/schemas/InvitableRole' }
+        expires_at: { type: string, format: date-time }
+        visible_data:
+          type: array
+          items: { type: string }
+          description: 'Chaves do que o papel enxerga (ex.: timeline, charts).'
+
+    # ----------------------------------------------------------- tracking
+    EventType:
+      type: string
+      enum: [SLEEP, FEEDING, PUMPING, DIAPER]
+    DiaperType:
+      type: string
+      enum: [WET, DIRTY, MIXED, DRY, UNSPECIFIED]
+      x-extensible-enum: true
+      description: |
+        Enum **extensível**: tolerar valores desconhecidos. `WET` = urina; `DIRTY` = fezes; `MIXED` = ambos;
+        `DRY` = verificada, sem urina nem fezes; `UNSPECIFIED` = usuário não especificou. `UNKNOWN` fica reservado
+        a migração de dados antigos.
+    FeedingType:
+      type: string
+      enum: [BREASTFEEDING, BOTTLE, SOLID, OTHER]
+      x-extensible-enum: true
+      description: 'Enum **extensível**: tolerar valores desconhecidos. Imutável após a criação (exclua e recrie).'
+    MilkType:
+      type: string
+      enum: [BREAST_MILK, FORMULA, MIXED, OTHER, UNSPECIFIED]
+      x-extensible-enum: true
+      description: |
+        Enum **extensível**: tolerar valores desconhecidos. `UNSPECIFIED` = usuário não especificou; `UNKNOWN` fica
+        reservado a migração de dados antigos. **Só se aplica quando `feeding_type=BOTTLE`**; nos demais tipos o
+        campo `milk_type` é `null` (não se aplica).
+    BreastSide:
+      type: string
+      enum: [LEFT, RIGHT, BOTH]
+      description: Lado da amamentação (ou da bomba).
+    EventBase:
+      type: object
+      required: [event_type, id, baby_id, version, tz, created_at, updated_at, created_by, last_modified_by]
+      properties:
+        event_type: { $ref: '#/components/schemas/EventType' }
+        id:
+          type: string
+          format: uuid
+          description: Gerado no cliente.
+        baby_id: { type: string, format: uuid }
+        version:
+          type: integer
+          minimum: 1
+          description: Versão da entidade, atribuída só pelo servidor (INV-19).
+        tz:
+          type: string
+          description: IANA vigente quando registrado (RB-014).
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        created_by: { $ref: '#/components/schemas/UserRef' }
+        last_modified_by: { $ref: '#/components/schemas/UserRef' }
+    SleepSession:
+      allOf:
+        - $ref: '#/components/schemas/EventBase'
+        - type: object
+          required: [sleep_type, start_at, end_at, source]
+          properties:
+            event_type: { const: SLEEP }
+            sleep_type: { type: string, enum: [NAP, NIGHT] }
+            start_at: { type: string, format: date-time }
+            end_at:
+              type: [string, 'null']
+              format: date-time
+              description: Nulo = em andamento.
+            duration_seconds:
+              type: [integer, 'null']
+              readOnly: true
+              description: Derivada; nula se em aberto.
+            method_or_place: { type: [string, 'null'], maxLength: 80 }
+            notes: { type: [string, 'null'], maxLength: 500 }
+            source: { type: string, enum: [TIMER, MANUAL] }
+            night_awakenings:
+              type: [integer, 'null']
+              readOnly: true
+              description: |
+                Derivado dos `WakeEvent` da sessão (nunca gravado). `null` = não se aplica (soneca) ou dados
+                insuficientes; `0` = acompanhamento suficiente e nenhum despertar; `N>0` = quantidade.
+    FeedingSession:
+      allOf:
+        - $ref: '#/components/schemas/EventBase'
+        - type: object
+          required: [feeding_type, start_at]
+          properties:
+            event_type: { const: FEEDING }
+            feeding_type: { $ref: '#/components/schemas/FeedingType' }
+            start_at: { type: string, format: date-time }
+            end_at:
+              type: [string, 'null']
+              format: date-time
+              description: Obrigatório em `BREASTFEEDING` (PA-05 resolvido, ADR-0010); opcional nos demais.
+            duration_seconds: { type: [integer, 'null'], readOnly: true }
+            side:
+              oneOf:
+                - $ref: '#/components/schemas/BreastSide'
+                - type: 'null'
+              description: Só em `BREASTFEEDING`; nos demais, `null` (não se aplica).
+            volume_ml:
+              type: [integer, 'null']
+              minimum: 1
+              description: Só em `BOTTLE`; nos demais, `null` (não se aplica).
+            milk_type:
+              oneOf:
+                - $ref: '#/components/schemas/MilkType'
+                - type: 'null'
+              description: 'Só em `BOTTLE`; nos demais tipos é `null` (não se aplica). Valores vigentes em /reference-data.'
+            notes: { type: [string, 'null'], maxLength: 500 }
+    PumpingSession:
+      allOf:
+        - $ref: '#/components/schemas/EventBase'
+        - type: object
+          required: [start_at, end_at]
+          properties:
+            event_type: { const: PUMPING }
+            start_at: { type: string, format: date-time }
+            end_at: { type: string, format: date-time }
+            duration_seconds: { type: integer, readOnly: true }
+            volume_ml: { type: [integer, 'null'], minimum: 1 }
+            side:
+              oneOf:
+                - $ref: '#/components/schemas/BreastSide'
+                - type: 'null'
+    DiaperEvent:
+      allOf:
+        - $ref: '#/components/schemas/EventBase'
+        - type: object
+          required: [occurred_at, diaper_type]
+          properties:
+            event_type: { const: DIAPER }
+            occurred_at: { type: string, format: date-time }
+            diaper_type: { $ref: '#/components/schemas/DiaperType' }
+            notes: { type: [string, 'null'], maxLength: 500 }
+    WakeEvent:
+      type: object
+      description: |
+        Despertar durante uma sessão de sono (ADR-0009). **Fonte da verdade** de `night_awakenings`. Entidade
+        sincronizável (push/pull, `version`, tombstone) e com correção manual. Não aparece em `/timeline`.
+      required: [id, baby_id, sleep_session_id, started_at, ended_at, duration_seconds, source, version, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Gerado no cliente.
+        baby_id: { type: string, format: uuid }
+        sleep_session_id: { type: string, format: uuid }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        duration_seconds:
+          type: integer
+          minimum: 0
+          readOnly: true
+          description: Derivada de `started_at` e `ended_at`.
+        source:
+          type: string
+          enum: [MANUAL, INFERRED, IMPORT]
+          description: '`MANUAL` informado/corrigido por cuidador; `INFERRED` deduzido pelo servidor; `IMPORT` vindo de importação.'
+        version:
+          type: integer
+          minimum: 1
+          description: Versão da entidade, atribuída só pelo servidor.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      examples:
+        - id: 4c1b7d52-9a0e-4f3b-8d21-5e6f7a8b9c0d
+          baby_id: 7d0a5c9e-1c0b-4d3a-b5f4-2f9d0e6a8b21
+          sleep_session_id: 0b8f1a52-6f3e-4a0c-8f86-6c3d7a3c1a10
+          started_at: '2026-10-08T05:10:00Z'
+          ended_at: '2026-10-08T05:25:00Z'
+          duration_seconds: 900
+          source: MANUAL
+          version: 1
+          created_at: '2026-10-08T08:00:00Z'
+          updated_at: '2026-10-08T08:00:00Z'
+    Event:
+      oneOf:
+        - $ref: '#/components/schemas/SleepSession'
+        - $ref: '#/components/schemas/FeedingSession'
+        - $ref: '#/components/schemas/PumpingSession'
+        - $ref: '#/components/schemas/DiaperEvent'
+      discriminator:
+        propertyName: event_type
+        mapping:
+          SLEEP: '#/components/schemas/SleepSession'
+          FEEDING: '#/components/schemas/FeedingSession'
+          PUMPING: '#/components/schemas/PumpingSession'
+          DIAPER: '#/components/schemas/DiaperEvent'
+    TimelinePage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Event' }
+        page: { $ref: '#/components/schemas/PageInfo' }
+    EventHistoryEntry:
+      type: object
+      required: [at, actor, action]
+      properties:
+        at: { type: string, format: date-time }
+        actor: { $ref: '#/components/schemas/UserRef' }
+        action: { type: string, enum: [CREATED, UPDATED, DELETED, CONFLICT_RESOLVED] }
+        changed_fields:
+          type: array
+          items: { type: string }
+        resolution: { $ref: '#/components/schemas/Resolution' }
+
+    # --------------------------------------------------------------- sync
+    SyncCursor:
+      type: string
+      minLength: 1
+      maxLength: 512
+      description: Cursor **opaco**. O cliente nunca interpreta, ordena nem compara. Não é intercambiável entre bebês.
+    SyncEntityType:
+      type: string
+      enum: [SLEEP_SESSION, FEEDING_SESSION, PUMPING_SESSION, DIAPER_EVENT, WAKE_EVENT]
+    SleepData:
+      type: object
+      description: Dados de criação de `SLEEP_SESSION`.
+      required: [sleep_type, start_at, tz, source]
+      properties:
+        sleep_type: { type: string, enum: [NAP, NIGHT] }
+        start_at: { type: string, format: date-time }
+        end_at: { type: [string, 'null'], format: date-time }
+        tz: { type: string }
+        method_or_place: { type: [string, 'null'], maxLength: 80 }
+        notes: { type: [string, 'null'], maxLength: 500 }
+        source: { type: string, enum: [TIMER, MANUAL] }
+      additionalProperties: false
+    BreastFeedingData:
+      type: object
+      description: |
+        Dados de criação de `FEEDING_SESSION` com `feeding_type=BREASTFEEDING`. `end_at` é **obrigatório**
+        (ADR-0010, decisão 5; PA-05 resolvido). Reabrir só se o timer de mamada compartilhado virar requisito.
+      required: [feeding_type, side, start_at, end_at, tz]
+      properties:
+        feeding_type:
+          type: string
+          const: BREASTFEEDING
+        side: { $ref: '#/components/schemas/BreastSide' }
+        start_at: { type: string, format: date-time }
+        end_at: { type: string, format: date-time }
+        tz: { type: string }
+        notes: { type: [string, 'null'], maxLength: 500 }
+      additionalProperties: false
+    BottleFeedingData:
+      type: object
+      description: Dados de criação de `FEEDING_SESSION` com `feeding_type=BOTTLE`.
+      required: [feeding_type, start_at, volume_ml, tz]
+      properties:
+        feeding_type:
+          type: string
+          const: BOTTLE
+        start_at: { type: string, format: date-time }
+        end_at: { type: [string, 'null'], format: date-time }
+        volume_ml: { type: integer, minimum: 1 }
+        milk_type:
+          description: Único tipo de alimentação em que `milk_type` se aplica; `null` = não informado.
+          oneOf:
+            - $ref: '#/components/schemas/MilkType'
+            - type: 'null'
+        tz: { type: string }
+        notes: { type: [string, 'null'], maxLength: 500 }
+      additionalProperties: false
+    OtherFeedingData:
+      type: object
+      description: |
+        Dados de criação de `FEEDING_SESSION` com `feeding_type` `SOLID` ou `OTHER`. `milk_type`, `side` e
+        `volume_ml` não se aplicam (omitidos ou `null`).
+      required: [feeding_type, start_at, tz]
+      properties:
+        feeding_type:
+          type: string
+          enum: [SOLID, OTHER]
+        start_at: { type: string, format: date-time }
+        end_at: { type: [string, 'null'], format: date-time }
+        tz: { type: string }
+        notes: { type: [string, 'null'], maxLength: 500 }
+      additionalProperties: false
+    PumpingData:
+      type: object
+      description: Dados de criação de `PUMPING_SESSION`.
+      required: [start_at, end_at, tz]
+      properties:
+        start_at: { type: string, format: date-time }
+        end_at: { type: string, format: date-time }
+        volume_ml: { type: [integer, 'null'], minimum: 1 }
+        side:
+          oneOf:
+            - $ref: '#/components/schemas/BreastSide'
+            - type: 'null'
+        tz: { type: string }
+      additionalProperties: false
+    DiaperData:
+      type: object
+      description: Dados de criação de `DIAPER_EVENT`.
+      required: [occurred_at, diaper_type, tz]
+      properties:
+        occurred_at: { type: string, format: date-time }
+        diaper_type: { $ref: '#/components/schemas/DiaperType' }
+        tz: { type: string }
+        notes: { type: [string, 'null'], maxLength: 500 }
+      additionalProperties: false
+    WakeEventData:
+      type: object
+      description: Dados de criação de `WAKE_EVENT`. `sleep_session_id` deve existir e pertencer ao mesmo bebê.
+      required: [sleep_session_id, started_at, ended_at]
+      properties:
+        sleep_session_id: { type: string, format: uuid }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        source:
+          type: string
+          enum: [MANUAL, INFERRED, IMPORT]
+          default: MANUAL
+      additionalProperties: false
+    EventPatch:
+      type: object
+      description: |
+        Campos alterados (parcial). Apenas campos presentes entram na resolução por campo; `null` limpa campos anuláveis.
+        Não é possível alterar `feeding_type`: exclua e recrie.
+      properties:
+        sleep_type: { type: string, enum: [NAP, NIGHT] }
+        start_at: { type: string, format: date-time }
+        end_at: { type: [string, 'null'], format: date-time }
+        occurred_at: { type: string, format: date-time }
+        tz: { type: string }
+        method_or_place: { type: [string, 'null'], maxLength: 80 }
+        notes: { type: [string, 'null'], maxLength: 500 }
+        side:
+          oneOf:
+            - $ref: '#/components/schemas/BreastSide'
+            - type: 'null'
+        volume_ml: { type: [integer, 'null'], minimum: 1 }
+        milk_type:
+          description: Só em `BOTTLE`.
+          oneOf:
+            - $ref: '#/components/schemas/MilkType'
+            - type: 'null'
+        diaper_type: { $ref: '#/components/schemas/DiaperType' }
+        started_at:
+          type: string
+          format: date-time
+          description: Só em `WAKE_EVENT`.
+        ended_at:
+          type: string
+          format: date-time
+          description: Só em `WAKE_EVENT` (em `SLEEP_SESSION`/mamada/bomba o campo é `end_at`).
+        source:
+          type: string
+          enum: [MANUAL, INFERRED, IMPORT]
+          description: Só em `WAKE_EVENT` (correção manual marca `MANUAL`).
+      additionalProperties: false
+      minProperties: 1
+    MutationBase:
+      type: object
+      required: [mutation_id, op, entity_type, entity_id, baby_id, base_version, client_created_at]
+      properties:
+        mutation_id:
+          type: string
+          format: uuid
+          description: Chave de idempotência da mutação.
+        op: { type: string, enum: [CREATE, UPDATE, DELETE] }
+        entity_type: { $ref: '#/components/schemas/SyncEntityType' }
+        entity_id: { type: string, format: uuid }
+        baby_id: { type: string, format: uuid }
+        base_version:
+          type: integer
+          minimum: 0
+          description: 0 em criação; senão a versão do servidor conhecida pelo cliente.
+        client_created_at:
+          type: string
+          format: date-time
+          description: Instante da ação no dispositivo (preservado).
+    CreateMutation:
+      allOf:
+        - $ref: '#/components/schemas/MutationBase'
+        - type: object
+          required: [data]
+          properties:
+            op: { const: CREATE }
+            base_version: { const: 0 }
+            data:
+              description: Corresponde a `entity_type`.
+              oneOf:
+                - $ref: '#/components/schemas/SleepData'
+                - $ref: '#/components/schemas/BreastFeedingData'
+                - $ref: '#/components/schemas/BottleFeedingData'
+                - $ref: '#/components/schemas/OtherFeedingData'
+                - $ref: '#/components/schemas/PumpingData'
+                - $ref: '#/components/schemas/DiaperData'
+                - $ref: '#/components/schemas/WakeEventData'
+    UpdateMutation:
+      allOf:
+        - $ref: '#/components/schemas/MutationBase'
+        - type: object
+          required: [data]
+          properties:
+            op: { const: UPDATE }
+            data: { $ref: '#/components/schemas/EventPatch' }
+    DeleteMutation:
+      allOf:
+        - $ref: '#/components/schemas/MutationBase'
+        - type: object
+          properties:
+            op: { const: DELETE }
+    SyncMutation:
+      oneOf:
+        - $ref: '#/components/schemas/CreateMutation'
+        - $ref: '#/components/schemas/UpdateMutation'
+        - $ref: '#/components/schemas/DeleteMutation'
+      discriminator:
+        propertyName: op
+        mapping:
+          CREATE: '#/components/schemas/CreateMutation'
+          UPDATE: '#/components/schemas/UpdateMutation'
+          DELETE: '#/components/schemas/DeleteMutation'
+    PushRequest:
+      type: object
+      required: [device_id, mutations]
+      properties:
+        device_id:
+          type: string
+          format: uuid
+          description: Deve coincidir com o dispositivo da sessão.
+        mutations:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: '#/components/schemas/SyncMutation' }
+    Resolution:
+      type: string
+      description: |
+        `NONE` sem conflito; `MERGED` campos disjuntos combinados; `LWW_CLIENT_WON` / `LWW_SERVER_WON` campo em
+        conflito decidido por last-write-wins; `DELETE_WINS` exclusão concorrente prevaleceu (D-36); `KEPT_BOTH` sono
+        sobreposto preservado e sinalizado (política `ACCEPT_AND_WARN`, ADR-0009). Com a política `REJECT`, o
+        sobreposto vira `REJECTED` com `problem.code=SLEEP_OVERLAP`.
+      enum: [NONE, MERGED, LWW_CLIENT_WON, LWW_SERVER_WON, DELETE_WINS, KEPT_BOTH]
+    FieldConflict:
+      type: object
+      required: [field, kept]
+      properties:
+        field: { type: string }
+        kept: { type: string, enum: [CLIENT, SERVER] }
+    PushWarning:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, enum: [SLEEP_OVERLAP, OPEN_SLEEP_EXISTS, CLIENT_CLOCK_SKEW] }
+        related_entity_ids:
+          type: array
+          items: { type: string, format: uuid }
+        skew_seconds: { type: integer }
+    MutationResult:
+      type: object
+      required: [mutation_id, status]
+      properties:
+        mutation_id: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [APPLIED, DUPLICATE, REJECTED]
+          description: '`DUPLICATE` = já aplicada antes; devolve o estado canônico atual. `REJECTED` não altera estado.'
+        entity_type: { $ref: '#/components/schemas/SyncEntityType' }
+        entity_id: { type: string, format: uuid }
+        version:
+          type: integer
+          description: Versão canônica após a aplicação (não em `REJECTED`).
+        resolution: { $ref: '#/components/schemas/Resolution' }
+        conflicts:
+          type: array
+          items: { $ref: '#/components/schemas/FieldConflict' }
+        warnings:
+          type: array
+          items: { $ref: '#/components/schemas/PushWarning' }
+        entity:
+          description: Estado canônico quando `resolution != none` ou `DUPLICATE` (o cliente reconcilia sem novo pull).
+          oneOf:
+            - $ref: '#/components/schemas/Event'
+            - $ref: '#/components/schemas/WakeEvent'
+            - type: 'null'
+        retryable:
+          type: boolean
+          description: 'Só em `REJECTED`. `false` = descartar a mutação; `true` = reenviar depois.'
+        problem: { $ref: '#/components/schemas/Problem' }
+    PushResponse:
+      type: object
+      required: [results, server_time]
+      properties:
+        server_time: { type: string, format: date-time }
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/MutationResult' }
+    PullEntityType:
+      type: string
+      enum: [BABY, SLEEP_SESSION, FEEDING_SESSION, PUMPING_SESSION, DIAPER_EVENT, WAKE_EVENT, SLEEP_PREFERENCES, SLEEP_PREDICTION]
+    PullChange:
+      type: object
+      required: [op, entity_type, entity_id, version]
+      properties:
+        op: { type: string, enum: [UPSERT, TOMBSTONE] }
+        entity_type: { $ref: '#/components/schemas/PullEntityType' }
+        entity_id: { type: string, format: uuid }
+        version: { type: integer }
+        entity:
+          description: Presente em `UPSERT`. Corresponde a `entity_type`.
+          oneOf:
+            - $ref: '#/components/schemas/Baby'
+            - $ref: '#/components/schemas/Event'
+            - $ref: '#/components/schemas/WakeEvent'
+            - $ref: '#/components/schemas/SleepPreferences'
+            - $ref: '#/components/schemas/SleepPrediction'
+        deleted_at:
+          type: string
+          format: date-time
+          description: Presente em `TOMBSTONE`. Sem conteúdo do evento (apenas id e versão).
+    PullResponse:
+      type: object
+      required: [mode, baby_id, changes, has_more, next_cursor, server_time]
+      properties:
+        mode: { type: string, enum: [SNAPSHOT, DELTA] }
+        baby_id: { type: string, format: uuid }
+        changes:
+          type: array
+          items: { $ref: '#/components/schemas/PullChange' }
+        has_more: { type: boolean }
+        next_cursor: { $ref: '#/components/schemas/SyncCursor' }
+        server_time: { type: string, format: date-time }
+
+    # -------------------------------------------------------------- sleep
+    SleepPrediction:
+      type: object
+      required: [id, baby_id, version, kind, predicted_start, confidence, explanation, model_version, computed_at]
+      properties:
+        id: { type: string, format: uuid }
+        baby_id: { type: string, format: uuid }
+        version: { type: integer }
+        kind: { type: string, enum: [NEXT_NAP, BEDTIME] }
+        predicted_start: { type: string, format: date-time }
+        predicted_end:
+          type: [string, 'null']
+          format: date-time
+          description: Faixa (não hora exata).
+        confidence:
+          type: object
+          required: [level]
+          properties:
+            level:
+              type: string
+              enum: [BUILDING, FAIR, GOOD]
+              description: 'Rótulos UX: Em construção, Razoável, Boa.'
+        explanation:
+          type: object
+          required: [key]
+          properties:
+            key:
+              type: string
+              description: Chave de mensagem localizável.
+            params: { type: object, additionalProperties: true }
+        baseline_only:
+          type: boolean
+          description: Verdadeiro em cold start (somente referência por idade).
+        model_version: { type: string }
+        computed_at: { type: string, format: date-time }
+        inputs_version: { type: integer }
+    SleepPredictionResponse:
+      type: object
+      required: [status, predictions, disclaimer_key]
+      properties:
+        status: { type: string, enum: [AVAILABLE, SLEEPING, INSUFFICIENT_DATA] }
+        disclaimer_key:
+          type: string
+          description: Chave do aviso de que é estimativa e não diagnóstico (RNF-014).
+        predictions:
+          type: array
+          items: { $ref: '#/components/schemas/SleepPrediction' }
+    SleepPreferencesInput:
+      type: object
+      properties:
+        target_nap_count:
+          type: [integer, 'null']
+          minimum: 0
+          maximum: 8
+          description: 'Limites reais: D-21.'
+        bedtime_from:
+          type: [string, 'null']
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+        bedtime_to:
+          type: [string, 'null']
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+      additionalProperties: false
+    SleepPreferences:
+      type: object
+      required: [baby_id, version, updated_at]
+      properties:
+        baby_id: { type: string, format: uuid }
+        target_nap_count:
+          type: [integer, 'null']
+          minimum: 0
+          maximum: 8
+        bedtime_from:
+          type: [string, 'null']
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+        bedtime_to:
+          type: [string, 'null']
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+        version: { type: integer }
+        updated_at: { type: string, format: date-time }
+
+    # ------------------------------------------------------------- charts
+    SummaryMetrics:
+      type: object
+      description: Médias por dia (em `summary`) ou diferenças absolutas (em `deltas`). Nulo = sem dados (indisponível); `0` = zero conhecido.
+      properties:
+        days_counted: { type: integer }
+        sleep_total_minutes_avg: { type: [number, 'null'] }
+        nap_count_avg: { type: [number, 'null'] }
+        night_awakenings_avg:
+          type: [number, 'null']
+          description: Média diária derivada de `WakeEvent`. `null` = dados insuficientes; `0` = acompanhamento suficiente sem despertar.
+        feeding_count_avg: { type: [number, 'null'] }
+        bottle_volume_ml_avg: { type: [number, 'null'] }
+        pumping_volume_ml_avg: { type: [number, 'null'] }
+        diaper_count_avg: { type: [number, 'null'] }
+    AggregateBucket:
+      type: object
+      required: [local_date, start_at]
+      properties:
+        local_date:
+          type: string
+          format: date
+          description: Dia civil no fuso do bebê.
+        start_at:
+          type: string
+          format: date-time
+          description: Início do bucket em UTC.
+        sleep:
+          type: object
+          properties:
+            total_minutes: { type: integer }
+            night_minutes: { type: integer }
+            nap_minutes: { type: integer }
+            nap_count: { type: integer }
+            night_awakenings:
+              type: [integer, 'null']
+              description: |
+                Derivado de `WakeEvent` (ADR-0009), nunca gravado. `null` = dados insuficientes; `0` =
+                acompanhamento suficiente e nenhum despertar; `N>0` = quantidade.
+            wake_window_minutes:
+              type: [object, 'null']
+              properties:
+                avg: { type: number }
+                min: { type: number }
+                max: { type: number }
+        feeding:
+          type: object
+          properties:
+            breast_count: { type: integer }
+            breast_minutes: { type: integer }
+            bottle_count: { type: integer }
+            bottle_volume_ml: { type: integer }
+        pumping:
+          type: object
+          properties:
+            count: { type: integer }
+            minutes: { type: integer }
+            volume_ml: { type: integer }
+        diapers:
+          type: object
+          properties:
+            count: { type: integer }
+            by_type:
+              type: object
+              additionalProperties: { type: integer }
+    AggregatesResponse:
+      type: object
+      required: [baby_id, period, range, tz, granularity, generated_at, buckets, summary, data_sufficiency]
+      properties:
+        baby_id: { type: string, format: uuid }
+        period: { type: string, enum: [DAY, WEEK, MONTH] }
+        range:
+          type: object
+          required: [from, to]
+          properties:
+            from: { type: string, format: date }
+            to:
+              type: string
+              format: date
+              description: Inclusive.
+        tz: { type: string }
+        granularity: { type: string, enum: [HOUR, DAY] }
+        generated_at: { type: string, format: date-time }
+        buckets:
+          type: array
+          items: { $ref: '#/components/schemas/AggregateBucket' }
+        summary: { $ref: '#/components/schemas/SummaryMetrics' }
+        comparison:
+          type: [object, 'null']
+          required: [kind, previous_range, deltas]
+          properties:
+            kind:
+              type: string
+              const: OWN_HISTORY
+              description: Sempre o próprio histórico (RB-013).
+            previous_range:
+              type: object
+              properties:
+                from: { type: string, format: date }
+                to: { type: string, format: date }
+            deltas: { $ref: '#/components/schemas/SummaryMetrics' }
+        data_sufficiency:
+          type: object
+          required: [sufficient, days_with_data]
+          properties:
+            sufficient: { type: boolean }
+            days_with_data: { type: integer }
+            min_days_required:
+              type: [integer, 'null']
+              description: 'Config (D-27).'
+
+    # ------------------------------------------------------ notifications
+    NotificationCategory:
+      type: string
+      enum: [NAP, BEDTIME, ROUTINE, DEVELOPMENT_PHASE, SYSTEM]
+    NotificationCategoryPreference:
+      type: object
+      required: [category, enabled]
+      properties:
+        category: { $ref: '#/components/schemas/NotificationCategory' }
+        enabled:
+          type: boolean
+          description: '`SYSTEM` é sempre verdadeiro e não editável.'
+        lead_time_minutes:
+          type: [integer, 'null']
+          minimum: 0
+          description: 'Limites: D-29.'
+        quiet_hours_start:
+          type: [string, 'null']
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+          description: Hora local do bebê/família.
+        quiet_hours_end:
+          type: [string, 'null']
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+        available:
+          type: boolean
+          readOnly: true
+          description: 'Falso para `DEVELOPMENT_PHASE` no MVP (D-10).'
+    NotificationSettingsInput:
+      type: object
+      required: [categories]
+      properties:
+        hide_baby_name_in_push:
+          type: boolean
+          default: true
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/NotificationCategoryPreference' }
+    NotificationSettings:
+      type: object
+      required: [baby_id, categories, os_permission_hint]
+      properties:
+        baby_id: { type: string, format: uuid }
+        hide_baby_name_in_push: { type: boolean }
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/NotificationCategoryPreference' }
+        os_permission_hint:
+          type: string
+          enum: [UNKNOWN, AUTHORIZED, DENIED]
+          description: Último estado reportado pelo dispositivo.
+
+    # ------------------------------------------------------ subscriptions
+    Feature:
+      type: object
+      required: [key, enabled]
+      properties:
+        key:
+          type: string
+          examples: [charts.month]
+        enabled: { type: boolean }
+        limit:
+          type: [integer, 'null']
+          description: Limite numérico do plano, quando aplicável.
+        reason:
+          type: string
+          enum: [PREMIUM_REQUIRED, FLAG_OFF, PLAN_LIMIT]
+          description: Presente quando `enabled=false`.
+    Entitlement:
+      type: object
+      required: [plan, status, source, fetched_at, cache_expires_at, features]
+      properties:
+        plan: { type: string, enum: [FREE, PREMIUM] }
+        status: { type: string, enum: [NONE, PENDING, ACTIVE, GRACE, EXPIRED, CANCELLED, REVOKED] }
+        source:
+          type: string
+          enum: [NONE, OWN, SHARED]
+          description: '`SHARED` = herdado do titular da família (RF-043).'
+        owner_display_name:
+          type: [string, 'null']
+          description: De quem é a assinatura, quando `SHARED`.
+        store:
+          type: [string, 'null']
+          enum: [APPLE, GOOGLE, null]
+        valid_until: { type: [string, 'null'], format: date-time }
+        auto_renews: { type: [boolean, 'null'] }
+        fetched_at: { type: string, format: date-time }
+        cache_expires_at:
+          type: string
+          format: date-time
+          description: Validade do cache offline (D-31).
+        features:
+          type: array
+          items: { $ref: '#/components/schemas/Feature' }
+        seats:
+          type: [object, 'null']
+          description: Assentos do plano familiar (proposta, ADR-0005/D-04; ADR-0009).
+          properties:
+            total: { type: integer }
+            used: { type: integer }
+            additional:
+              type: [object, 'null']
+              description: Titular do assento adicional, que **não precisa ser cuidador ativo** de um bebê. `null` = assento livre.
+              properties:
+                membership_id:
+                  type: [string, 'null']
+                  format: uuid
+                  description: Nulo quando o adicional não é cuidador.
+                email_masked: { type: [string, 'null'] }
+                status: { type: string, enum: [PENDING, ACTIVE] }
+                is_caregiver: { type: boolean }
+    PurchaseRequest:
+      type: object
+      required: [store, product_id]
+      properties:
+        store: { type: string, enum: [APPLE, GOOGLE] }
+        product_id: { type: string }
+        apple_signed_transaction:
+          type: string
+          writeOnly: true
+          description: JWS da transação (StoreKit 2). Obrigatório se `store=apple`.
+        google_purchase_token:
+          type: string
+          writeOnly: true
+          description: Obrigatório se `store=google`.
+    RestoreRequest:
+      type: object
+      required: [store]
+      properties:
+        store: { type: string, enum: [APPLE, GOOGLE] }
+        apple_signed_transactions:
+          type: array
+          items: { type: string }
+          writeOnly: true
+        google_purchase_tokens:
+          type: array
+          items: { type: string }
+          writeOnly: true
+
+    # ------------------------------------------------------------ privacy
+    PurposeKey:
+      type: string
+      description: Catálogo do privacy-security-spec 3.2. Valores futuros podem surgir; o cliente ignora desconhecidos.
+      enum: [TERMS_OF_USE, PRIVACY_POLICY, CHILD_DATA_GUARDIAN, ANALYTICS_PRODUCT, MARKETING_EMAIL, PUSH_NOTIFICATIONS]
+    LegalDocument:
+      type: object
+      required: [purpose_key, version, url, effective_at]
+      properties:
+        purpose_key: { $ref: '#/components/schemas/PurposeKey' }
+        version: { type: string }
+        url: { type: string, format: uri }
+        content_hash: { type: string }
+        effective_at: { type: string, format: date-time }
+        required: { type: boolean }
+    ConsentInput:
+      type: object
+      required: [purpose_key, document_version, status, source]
+      properties:
+        purpose_key: { $ref: '#/components/schemas/PurposeKey' }
+        document_version: { type: string }
+        status: { type: string, enum: [GRANTED, REVOKED] }
+        source: { type: string, enum: [ONBOARDING, SETTINGS, PROMPT] }
+        baby_id:
+          type: [string, 'null']
+          format: uuid
+          description: Para consentimentos sobre dados de um bebê.
+        locale: { type: string }
+    ConsentRecord:
+      type: object
+      required: [id, purpose_key, document_version, status, granted_at]
+      properties:
+        id: { type: string, format: uuid }
+        purpose_key: { $ref: '#/components/schemas/PurposeKey' }
+        document_version: { type: string }
+        status: { type: string, enum: [GRANTED, REVOKED, SUPERSEDED] }
+        granted_at: { type: string, format: date-time }
+        revoked_at: { type: [string, 'null'], format: date-time }
+        baby_id: { type: [string, 'null'], format: uuid }
+        source: { type: string, enum: [ONBOARDING, SETTINGS, PROMPT] }
+    ConsentsResponse:
+      type: object
+      required: [current, pending_required]
+      properties:
+        current:
+          type: array
+          items: { $ref: '#/components/schemas/ConsentRecord' }
+        pending_required:
+          type: array
+          items: { $ref: '#/components/schemas/LegalDocument' }
+        history:
+          type: array
+          items: { $ref: '#/components/schemas/ConsentRecord' }
+    DataExportRequest:
+      type: object
+      properties:
+        scope:
+          type: string
+          enum: [OWNED_DATA, PERSONAL_ONLY]
+          default: OWNED_DATA
+          description: |
+            `OWNED_DATA` = dados pessoais mais os dados dos bebês de que é Owner (padrão; exige ser Owner ativo).
+            `PERSONAL_ONLY` = apenas os dados pessoais do próprio usuário (conta, sessões, consentimentos,
+            autoria); sem dados de bebê. Para quem não é Owner o escopo é sempre `PERSONAL_ONLY` (ADR-0010).
+        baby_ids:
+          type: array
+          description: Omitido = todos os bebês de que é Owner. Ignorado com `scope=PERSONAL_ONLY`.
+          items: { type: string, format: uuid }
+        format:
+          type: string
+          enum: [JSON, CSV]
+          default: JSON
+          description: 'Formatos finais: D-32.'
+    DataExport:
+      type: object
+      required: [id, status, requested_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [REQUESTED, PROCESSING, READY, FAILED, EXPIRED] }
+        requested_at: { type: string, format: date-time }
+        ready_at: { type: [string, 'null'], format: date-time }
+        expires_at: { type: [string, 'null'], format: date-time }
+        schema_version: { type: [string, 'null'] }
+        format: { type: string, enum: [JSON, CSV] }
+        scope: { type: string, enum: [OWNED_DATA, PERSONAL_ONLY] }
+    AccountDeletionRequest:
+      type: object
+      required: [confirm]
+      properties:
+        confirm:
+          type: boolean
+          const: true
+        acknowledge_store_subscription:
+          type: boolean
+          description: Ciência de que a assinatura da loja não é cancelada.
+        acknowledge_other_caregivers:
+          type: boolean
+          description: |
+            Confirmação explícita de que os dados do bebê serão apagados **também para os outros cuidadores**.
+            Obrigatória (`true`) na política `CASCADE` quando algum bebê do Owner tem outros cuidadores ativos.
+        baby_decisions:
+          description: Obrigatório só nas políticas `BLOCK` e `TRANSFER_OWNERSHIP` para bebês compartilhados.
+          type: array
+          items:
+            type: object
+            required: [baby_id, action]
+            properties:
+              baby_id: { type: string, format: uuid }
+              action: { type: string, enum: [TRANSFER_OWNERSHIP, DELETE_BABY] }
+              new_owner_membership_id: { type: string, format: uuid }
+              acknowledge_other_caregivers: { type: boolean }
+    AccountDeletion:
+      type: object
+      required: [id, status, requested_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [REQUESTED, SCHEDULED, CANCELLED, COMPLETED] }
+        policy:
+          type: string
+          enum: [CASCADE, BLOCK, TRANSFER_OWNERSHIP]
+          description: Política aplicada (flag `account_deletion_policy`). Padrão `CASCADE`.
+        requested_at: { type: string, format: date-time }
+        grace_days:
+          type: integer
+          minimum: 0
+          description: Duração da janela de arrependimento aplicada (`policies.deletion_grace_days`; padrão 7).
+        scheduled_for:
+          type: [string, 'null']
+          format: date-time
+          description: |
+            Fim da janela de arrependimento (ADR-0009 decisão 4; ADR-0010 decisão 6): `requested_at + grace_days`.
+            O servidor não executa a exclusão antes deste instante; cancelável até lá. `null` = sem agendamento
+            (`CANCELLED`).
+        completed_at: { type: [string, 'null'], format: date-time }
+    PrivacyRequestCreate:
+      type: object
+      required: [type]
+      properties:
+        type: { $ref: '#/components/schemas/PrivacyRequestType' }
+        confirm:
+          type: boolean
+          description: Obrigatório (`true`) em `ANONYMIZATION`.
+        format:
+          type: string
+          enum: [JSON, CSV]
+          default: JSON
+          description: Só em `EXPORT` e `ACCESS`.
+        note:
+          type: string
+          maxLength: 1000
+          description: Descrição livre, sobretudo em `CORRECTION`. Não informar dados de saúde do bebê.
+      additionalProperties: false
+    PrivacyRequestType:
+      type: string
+      enum: [ACCESS, CORRECTION, EXPORT, ANONYMIZATION]
+    PrivacyRequest:
+      type: object
+      description: |
+        Requisição do titular sobre os **próprios dados pessoais** (ADR-0010). Nunca altera dados de bebê.
+      required: [id, type, status, requested_at, due_at]
+      properties:
+        id: { type: string, format: uuid }
+        type: { $ref: '#/components/schemas/PrivacyRequestType' }
+        status:
+          type: string
+          enum: [REQUESTED, IN_PROGRESS, SCHEDULED, COMPLETED, REJECTED, CANCELLED]
+          description: |
+            `REQUESTED` registrada; `IN_PROGRESS` em atendimento; `SCHEDULED` (só `ANONYMIZATION`) aguardando o fim
+            da janela de arrependimento; `COMPLETED` atendida; `REJECTED` recusada (ver `rejection_code`);
+            `CANCELLED` cancelada pelo titular.
+        requested_at: { type: string, format: date-time }
+        acknowledged_at:
+          type: [string, 'null']
+          format: date-time
+          description: Confirmação de recebimento (meta `policies.privacy_request_ack_hours`). `null` = ainda não confirmada.
+        due_at:
+          type: string
+          format: date-time
+          description: Prazo de atendimento (`requested_at + policies.privacy_request_sla_days`; padrão 15 dias; a validar, DJ-07).
+        scheduled_for:
+          type: [string, 'null']
+          format: date-time
+          description: 'Só em `ANONYMIZATION`: fim da janela de arrependimento. `null` = não se aplica.'
+        completed_at: { type: [string, 'null'], format: date-time }
+        data_export_id:
+          type: [string, 'null']
+          format: uuid
+          description: Em `ACCESS`/`EXPORT`, o `DataExport` (`scope=PERSONAL_ONLY`) gerado. `null` = não se aplica.
+        rejection_code:
+          type: [string, 'null']
+          description: 'Presente em `REJECTED` (ex.: `IDENTITY_NOT_VERIFIED`, `LEGAL_RETENTION`). Valores futuros possíveis; tolerar desconhecidos.'
+      examples:
+        - id: 2f6c1d3e-4a5b-4c6d-8e7f-9a0b1c2d3e4f
+          type: ACCESS
+          status: IN_PROGRESS
+          requested_at: '2026-10-08T18:00:00Z'
+          acknowledged_at: '2026-10-08T18:00:01Z'
+          due_at: '2026-10-23T18:00:00Z'
+          scheduled_for: null
+          completed_at: null
+          data_export_id: 9d2e3f4a-5b6c-4d7e-8f90-a1b2c3d4e5f6
+          rejection_code: null
+    AuditEvent:
+      type: object
+      required: [id, action, timestamp]
+      properties:
+        id: { type: string, format: uuid }
+        actor:
+          oneOf:
+            - $ref: '#/components/schemas/UserRef'
+            - type: 'null'
+        action:
+          type: string
+          examples: [caregiver.removed]
+        entity_type: { type: string }
+        entity_id: { type: [string, 'null'], format: uuid }
+        timestamp: { type: string, format: date-time }
+        metadata_safe:
+          type: object
+          additionalProperties: true
+          description: Sem PII nem conteúdo livre (INV-28).
+    AuditEventPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AuditEvent' }
+        page: { $ref: '#/components/schemas/PageInfo' }
+
+    # ---------------------------------------------------------- reference
+    ReferenceData:
+      type: object
+      required: [version, diaper_types, feeding_types, milk_types, sleep_methods, policies, limits]
+      properties:
+        version: { type: string }
+        diaper_types:
+          type: array
+          description: Valores vigentes de `DiaperType` (extensível).
+          items: { $ref: '#/components/schemas/DiaperType' }
+        feeding_types:
+          type: array
+          description: Valores vigentes de `FeedingType` (extensível).
+          items: { $ref: '#/components/schemas/FeedingType' }
+        milk_types:
+          type: array
+          description: Valores vigentes de `MilkType` (extensível); só se aplicam a `BOTTLE`.
+          items: { $ref: '#/components/schemas/MilkType' }
+        sleep_methods:
+          type: array
+          items: { type: string }
+        policies:
+          type: object
+          description: Comportamentos governados por flag em banco (ADR-0005/0009). O cliente apenas os reflete.
+          required: [sleep_overlap_policy, account_deletion_policy, deletion_grace_days, corrected_age_max_months, privacy_request_sla_days, privacy_request_ack_hours]
+          properties:
+            sleep_overlap_policy:
+              type: string
+              enum: [ACCEPT_AND_WARN, REJECT]
+              description: Padrão `ACCEPT_AND_WARN` (aceita e sinaliza com `SLEEP_OVERLAP`); `REJECT` rejeita a mutação.
+            account_deletion_policy:
+              type: string
+              enum: [CASCADE, BLOCK, TRANSFER_OWNERSHIP]
+              description: Padrão `CASCADE`.
+            deletion_grace_days:
+              type: integer
+              minimum: 0
+              default: 7
+              examples: [7]
+              description: |
+                Janela de arrependimento da exclusão de conta, em dias (ADR-0010, decisão 6; chave de banco
+                `privacy.deletion_grace_days`). **Padrão 7**, customizável em banco. Define
+                `AccountDeletion.scheduled_for` (e `PrivacyRequest.scheduled_for` em `ANONYMIZATION`).
+            corrected_age_max_months:
+              type: [integer, 'null']
+              default: 24
+              examples: [24]
+              description: |
+                Janela de aplicação da idade corrigida, em meses (ADR-0010, decisão 4; chave de banco
+                `age.corrected_window_months`). **Padrão inicial 24**, customizável em banco. `null` = sem limite.
+            privacy_request_sla_days:
+              type: integer
+              minimum: 1
+              default: 15
+              examples: [15]
+              description: Prazo de atendimento de requisições de privacidade, em dias (proposta privacy-security-spec 5; a validar, DJ-07).
+            privacy_request_ack_hours:
+              type: integer
+              minimum: 1
+              default: 48
+              examples: [48]
+              description: Meta de confirmação de recebimento de requisições de privacidade, em horas (a validar, DJ-07).
+        limits:
+          type: object
+          properties:
+            night_awakenings_min_session_minutes:
+              type: integer
+              minimum: 0
+              default: 240
+              examples: [240]
+              description: |
+                Duração mínima (minutos) de acompanhamento da sessão de sono para `night_awakenings` deixar de ser
+                `null` (ADR-0010, decisão 4; chave de banco `sleep.night_awakenings.min_session_minutes`).
+                **Padrão inicial 240**, customizável em banco.
+            bottle_volume_ml_max: { type: integer }
+            pumping_volume_ml_max: { type: integer }
+            notes_max_length: { type: integer }
+            sync_max_mutations_per_push: { type: integer }
+            sync_tombstone_retention_days:
+              type: integer
+              examples: [90]
+            invitation_ttl_days:
+              type: integer
+              examples: [7]

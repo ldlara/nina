@@ -7,7 +7,7 @@ Fonte: `specs/discovery-napper-wonder-weeks.md` (seções 6–15). O discovery c
 - Backend .NET com BFF; PostgreSQL.
 - Escopo desta iniciativa: **MVP completo**.
 
-## Escopo do MVP (45 RFs)
+## Escopo do MVP (37 RFs — corrigido: o título anterior dizia 45, mas a tabela soma 37; ver D-14 em specs/product-spec.md)
 | Grupo | RFs |
 |---|---|
 | Conta, sessão, consentimento | RF-001, 002, 003 |

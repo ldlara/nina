@@ -15,3 +15,6 @@ App parental com linha do tempo única do bebê: sono, alimentação, fraldas, a
 - `docs/project/backlog.md` — backlog, dependências e ondas
 - `docs/project/status.md` — status atual
 - `docs/project/decisions/` — ADRs
+
+## Ambiente de desenvolvimento
+`scripts/setup-dev-env.sh` instala .NET SDK 10 e Android SDK (Linux). iOS requer macOS + Xcode (teste local).

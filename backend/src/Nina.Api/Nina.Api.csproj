@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <ItemGroup>
+    <ProjectReference Include="..\Modules\Nina.Identity\Nina.Identity.csproj" />
+    <ProjectReference Include="..\Modules\Nina.Family\Nina.Family.csproj" />
+    <ProjectReference Include="..\Modules\Nina.Tracking\Nina.Tracking.csproj" />
+    <ProjectReference Include="..\Modules\Nina.SleepIntelligence\Nina.SleepIntelligence.csproj" />
+    <ProjectReference Include="..\Modules\Nina.Notifications\Nina.Notifications.csproj" />
+    <ProjectReference Include="..\Modules\Nina.Subscriptions\Nina.Subscriptions.csproj" />
+    <ProjectReference Include="..\Modules\Nina.Privacy\Nina.Privacy.csproj" />
+  </ItemGroup>
+</Project>
