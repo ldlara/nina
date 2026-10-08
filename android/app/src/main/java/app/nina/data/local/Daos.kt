@@ -17,6 +17,9 @@ abstract class BabyDao {
     @Query("SELECT * FROM baby WHERE id = :id")
     abstract fun observe(id: String): Flow<BabyEntity?>
 
+    @Query("SELECT * FROM baby WHERE id = :id")
+    abstract suspend fun get(id: String): BabyEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract suspend fun upsert(baby: BabyEntity)
 
@@ -64,8 +67,14 @@ abstract class MembershipDao {
     }
 }
 
-@Database(entities = [BabyEntity::class, MembershipEntity::class], version = 1, exportSchema = false)
+@Database(
+    entities = [BabyEntity::class, MembershipEntity::class, EventEntity::class, MutationEntity::class],
+    version = 2,
+    exportSchema = true,
+)
 abstract class NinaDatabase : RoomDatabase() {
     abstract fun babyDao(): BabyDao
     abstract fun membershipDao(): MembershipDao
+    abstract fun trackingDao(): TrackingDao
+    abstract fun mutationDao(): MutationDao
 }

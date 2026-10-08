@@ -41,11 +41,15 @@ public final class AppSessionViewModel {
     @ObservationIgnored private let auth: AuthRepository
     @ObservationIgnored private let babies: BabyRepository
     @ObservationIgnored private let preferences: PreferenceStore
+    @ObservationIgnored private let localCleaners: [LocalDataClearing]
 
-    public init(auth: AuthRepository, babies: BabyRepository, preferences: PreferenceStore) {
+    /// `localCleaners`: dados locais extras apagados no logout explícito (ex.: eventos e fila de mutações do IOS-002).
+    public init(auth: AuthRepository, babies: BabyRepository, preferences: PreferenceStore,
+                localCleaners: [LocalDataClearing] = []) {
         self.auth = auth
         self.babies = babies
         self.preferences = preferences
+        self.localCleaners = localCleaners
         if auth.hasStoredSession() {
             route = .main
         } else if preferences.bool(forKey: Self.onboardingCompletedKey) {
@@ -100,6 +104,7 @@ public final class AppSessionViewModel {
         await auth.logout()
         // Dados do bebê em cache saem junto com a sessão (privacidade em aparelho compartilhado).
         await babies.clearLocalData()
+        for cleaner in localCleaners { await cleaner.clearLocalData() }
         currentUser = nil
         notice = nil
         route = .auth(.login)

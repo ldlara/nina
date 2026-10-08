@@ -1,0 +1,96 @@
+{
+  "_header": "RASCUNHO — requer validação por especialista clínico",
+  "_notice": "Valores PROVISÓRIOS e conservadores, usados apenas como baseline do motor de previsão (ADR-0004). Não são recomendação clínica, meta de desenvolvimento nem diagnóstico. Não publicar em produção sem aprovação registrada de especialista (test-strategy 4.6, gate humano de BE-005).",
+  "version": "0.1.0-draft",
+  "status": "DRAFT_REQUIRES_CLINICAL_VALIDATION",
+  "provisional": true,
+  "transition_days": 14,
+  "max_age_days": 1095,
+  "plausibility": {
+    "bedtime_earliest": "17:30",
+    "bedtime_latest": "23:30",
+    "max_nap_count": 8
+  },
+  "bands": [
+    {
+      "id": "0-6w",
+      "age_days_from": 0,
+      "age_days_to": 42,
+      "nap_wake_minutes": { "min": 30, "typical": 45, "max": 60 },
+      "pre_bedtime_wake_minutes": { "min": 30, "typical": 45, "max": 60 },
+      "nap_count": { "min": 0, "typical": null, "max": 8 },
+      "nap_duration_minutes": { "min": 30, "typical": 50, "max": 120 },
+      "bedtime_local": null
+    },
+    {
+      "id": "6w-3m",
+      "age_days_from": 42,
+      "age_days_to": 91,
+      "nap_wake_minutes": { "min": 45, "typical": 75, "max": 105 },
+      "pre_bedtime_wake_minutes": { "min": 60, "typical": 80, "max": 105 },
+      "nap_count": { "min": 3, "typical": 4, "max": 6 },
+      "nap_duration_minutes": { "min": 30, "typical": 50, "max": 100 },
+      "bedtime_local": { "earliest": "19:30", "typical": "20:30", "latest": "22:00" }
+    },
+    {
+      "id": "3m-5m",
+      "age_days_from": 91,
+      "age_days_to": 150,
+      "nap_wake_minutes": { "min": 75, "typical": 105, "max": 135 },
+      "pre_bedtime_wake_minutes": { "min": 90, "typical": 120, "max": 150 },
+      "nap_count": { "min": 3, "typical": 4, "max": 5 },
+      "nap_duration_minutes": { "min": 30, "typical": 55, "max": 100 },
+      "bedtime_local": { "earliest": "19:00", "typical": "20:00", "latest": "21:30" }
+    },
+    {
+      "id": "5m-8m",
+      "age_days_from": 150,
+      "age_days_to": 240,
+      "nap_wake_minutes": { "min": 105, "typical": 135, "max": 180 },
+      "pre_bedtime_wake_minutes": { "min": 120, "typical": 150, "max": 195 },
+      "nap_count": { "min": 2, "typical": 3, "max": 4 },
+      "nap_duration_minutes": { "min": 30, "typical": 60, "max": 100 },
+      "bedtime_local": { "earliest": "18:45", "typical": "19:45", "latest": "21:00" }
+    },
+    {
+      "id": "8m-11m",
+      "age_days_from": 240,
+      "age_days_to": 330,
+      "nap_wake_minutes": { "min": 135, "typical": 165, "max": 210 },
+      "pre_bedtime_wake_minutes": { "min": 150, "typical": 180, "max": 225 },
+      "nap_count": { "min": 2, "typical": 2, "max": 3 },
+      "nap_duration_minutes": { "min": 30, "typical": 60, "max": 105 },
+      "bedtime_local": { "earliest": "18:30", "typical": "19:30", "latest": "20:45" }
+    },
+    {
+      "id": "11m-16m",
+      "age_days_from": 330,
+      "age_days_to": 480,
+      "nap_wake_minutes": { "min": 165, "typical": 195, "max": 240 },
+      "pre_bedtime_wake_minutes": { "min": 180, "typical": 210, "max": 255 },
+      "nap_count": { "min": 1, "typical": 2, "max": 2 },
+      "nap_duration_minutes": { "min": 40, "typical": 70, "max": 120 },
+      "bedtime_local": { "earliest": "18:30", "typical": "19:30", "latest": "20:45" }
+    },
+    {
+      "id": "16m-24m",
+      "age_days_from": 480,
+      "age_days_to": 730,
+      "nap_wake_minutes": { "min": 195, "typical": 240, "max": 300 },
+      "pre_bedtime_wake_minutes": { "min": 210, "typical": 255, "max": 315 },
+      "nap_count": { "min": 1, "typical": 1, "max": 2 },
+      "nap_duration_minutes": { "min": 45, "typical": 90, "max": 150 },
+      "bedtime_local": { "earliest": "18:45", "typical": "19:45", "latest": "21:00" }
+    },
+    {
+      "id": "24m-36m",
+      "age_days_from": 730,
+      "age_days_to": 1095,
+      "nap_wake_minutes": { "min": 240, "typical": 300, "max": 360 },
+      "pre_bedtime_wake_minutes": { "min": 255, "typical": 300, "max": 360 },
+      "nap_count": { "min": 0, "typical": 1, "max": 1 },
+      "nap_duration_minutes": { "min": 45, "typical": 90, "max": 150 },
+      "bedtime_local": { "earliest": "19:00", "typical": "20:00", "latest": "21:15" }
+    }
+  ]
+}

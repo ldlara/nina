@@ -3,6 +3,11 @@ import Foundation
 public struct UserRef: Codable, Hashable, Sendable, Identifiable {
     public var id: UUID
     public var displayName: String
+
+    public init(id: UUID, displayName: String) {
+        self.id = id
+        self.displayName = displayName
+    }
 }
 
 public struct Membership: Codable, Hashable, Sendable, Identifiable {

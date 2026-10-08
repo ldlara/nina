@@ -32,11 +32,20 @@ struct MainView: View {
         } else if babies.babies.isEmpty {
             LoadingOrErrorView(state: babies.state, retry: { Task { await babies.load() } })
         } else {
-            TabView {
-                HomeView(container: container, babies: babies)
-                    .tabItem { Label("tab.home", systemImage: "moon.stars") }
-                MoreView(container: container, babies: babies, pendingInviteToken: $pendingInviteToken)
-                    .tabItem { Label("tab.more", systemImage: "ellipsis.circle") }
+            if let baby = babies.selectedBaby {
+                // Hoje e Linha do tempo compartilham o mesmo ViewModel de tracking do bebê selecionado.
+                let tracking = container.trackingViewModel(for: baby)
+                TabView {
+                    HomeView(container: container, babies: babies, tracking: tracking)
+                        .tabItem { Label("tab.home", systemImage: "moon.stars") }
+                    TimelineScreen(container: container, tracking: tracking)
+                        .tabItem { Label("tab.timeline", systemImage: "list.bullet.rectangle") }
+                    MoreView(container: container, babies: babies, tracking: tracking, pendingInviteToken: $pendingInviteToken)
+                        .tabItem { Label("tab.more", systemImage: "ellipsis.circle") }
+                }
+                .task(id: tracking.context) { await tracking.reload() }
+                .onChange(of: container.network.isOnline, initial: true) { _, online in tracking.isOnline = online }
+                .onChange(of: container.session.currentUser, initial: true) { _, user in container.updateCurrentUser(user) }
             }
         }
     }

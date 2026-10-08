@@ -50,5 +50,53 @@
 			<string>%d dias</string>
 		</dict>
 	</dict>
+	<key>sync.pending_count</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>one</key>
+			<string>%d registro aguardando envio</string>
+			<key>other</key>
+			<string>%d registros aguardando envio</string>
+		</dict>
+	</dict>
+	<key>sync.rejected_count</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>one</key>
+			<string>%d registro não pôde ser enviado</string>
+			<key>other</key>
+			<string>%d registros não puderam ser enviados</string>
+		</dict>
+	</dict>
+	<key>more.logout.pending_warning</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>one</key>
+			<string>%d registro ainda não foi enviado e será apagado deste aparelho ao sair.</string>
+			<key>other</key>
+			<string>%d registros ainda não foram enviados e serão apagados deste aparelho ao sair.</string>
+		</dict>
+	</dict>
 </dict>
 </plist>

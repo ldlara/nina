@@ -57,6 +57,8 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Robolectric precisa dos recursos mesclados (Room em memória, strings localizadas).
+        unitTests.isIncludeAndroidResources = true
     }
 
     lint {
@@ -68,6 +70,11 @@ android {
     packaging {
         resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/LICENSE*", "META-INF/INDEX.LIST", "META-INF/io.netty.versions.properties")
     }
+}
+
+ksp {
+    // Esquemas do Room versionados (migrações reais, a fila de mutações não pode ser descartada).
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 kotlin {
@@ -107,4 +114,6 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.turbine)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
 }

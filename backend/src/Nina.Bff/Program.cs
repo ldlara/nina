@@ -85,6 +85,8 @@ app.MapGet("/ready", async (INinaApiClient api, CancellationToken ct) =>
         : Results.Json(new { status = "api-unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable));
 
 app.MapIdentityProxy();
+app.MapFamilyProxy();
+app.MapTrackingProxy();
 
 await app.RunAsync();
 

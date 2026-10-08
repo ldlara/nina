@@ -24,7 +24,7 @@ internal static class ModuleRegistration
     public static IServiceCollection AddNinaModules(this IServiceCollection services, IConfiguration configuration) => services
         .AddIdentityModule(configuration)
         .AddFamilyModule()
-        .AddTrackingModule()
+        .AddTrackingModule(configuration)
         .AddSleepIntelligenceModule()
         .AddNotificationsModule()
         .AddSubscriptionsModule()
@@ -33,6 +33,8 @@ internal static class ModuleRegistration
     public static IEndpointRouteBuilder MapNinaModules(this IEndpointRouteBuilder app)
     {
         app.MapIdentityModule();
+        app.MapFamilyModule();
+        app.MapTrackingModule();
         return app;
     }
 }

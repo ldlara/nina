@@ -63,8 +63,10 @@ actor SwiftDataBabyCache: BabyCache {
 
 enum LocalStore {
     /// Container persistente; se o arquivo estiver corrompido, cai para memória (o servidor é a fonte da verdade).
+    /// ATENÇÃO (IOS-002): o mesmo container guarda a fila de mutações offline. Cair para memória significa que
+    /// registros ainda não enviados deixam de existir após o próximo fechamento do app. Ver README (risco conhecido).
     static func makeContainer(inMemory: Bool = false) -> ModelContainer {
-        let schema = Schema([CachedBaby.self])
+        let schema = Schema([CachedBaby.self, CachedEvent.self, CachedMutation.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: inMemory)
         if let container = try? ModelContainer(for: schema, configurations: [configuration]) {
             return container

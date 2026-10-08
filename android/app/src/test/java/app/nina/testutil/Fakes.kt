@@ -28,6 +28,7 @@ class FakeBabyDao : BabyDao() {
     val items = MutableStateFlow<List<BabyEntity>>(emptyList())
     override fun observeAll(): Flow<List<BabyEntity>> = items
     override fun observe(id: String): Flow<BabyEntity?> = items.map { l -> l.firstOrNull { it.id == id } }
+    override suspend fun get(id: String): BabyEntity? = items.value.firstOrNull { it.id == id }
     override suspend fun upsert(baby: BabyEntity) { items.value = items.value.filterNot { it.id == baby.id } + baby }
     override suspend fun upsertAll(babies: List<BabyEntity>) { babies.forEach { upsert(it) } }
     override suspend fun deleteAll() { items.value = emptyList() }

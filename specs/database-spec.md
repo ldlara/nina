@@ -125,7 +125,7 @@ Alternativas descartadas, caso o spike ARCH-003 prefira sequência global: (A) `
 
 ### 6.4 Mutações do cliente
 
-`sync_mutation(mutation_id, baby_id, user_id, device_id, entity_type, entity_id, op, base_version, client_created_at, outcome, result_version)` registra o resultado de cada mutação sem payload. **A chave é `(user_id, device_id, mutation_id)`** [R-04/SR-014, contrato 1.0.1]: um tenant não "queima" o `mutation_id` de outro nem descobre que existe. O push faz `INSERT ... ON CONFLICT DO NOTHING` (**sem alvo de inferência**, que exigiria `SELECT` na coluna); 0 linhas ⇒ já aplicada ⇒ lê a linha própria (a política `SELECT` inclui `user_id = nina.user_id`, então o replay nunca fica invisível mesmo após perder o acesso ao bebê) e responde o `result_version` guardado (INV-18). A inserção exige acesso de escrita ao bebê e `user_id` = usuário do contexto. Conflitos resolvidos automaticamente geram `audit_event` `sync.conflict_resolved` (INV-21). `op ∈ CREATE|UPDATE|DELETE`, `outcome ∈ APPLIED|MERGED|IGNORED_TOMBSTONE|REJECTED`.
+`sync_mutation(mutation_id, baby_id, user_id, device_id, entity_type, entity_id, op, base_version, client_created_at, outcome, result_version, reject_code, resolution)` registra o resultado de cada mutação sem payload. **A chave é `(user_id, device_id, mutation_id)`** [R-04/SR-014, contrato 1.0.1]: um tenant não "queima" o `mutation_id` de outro nem descobre que existe. O push faz `INSERT ... ON CONFLICT DO NOTHING` (**sem alvo de inferência**, que exigiria `SELECT` na coluna); 0 linhas ⇒ já aplicada ⇒ lê a linha própria (a política `SELECT` inclui `user_id = nina.user_id`, então o replay nunca fica invisível mesmo após perder o acesso ao bebê) e responde o `result_version` guardado (INV-18). A inserção exige acesso de escrita ao bebê e `user_id` = usuário do contexto. Conflitos resolvidos automaticamente geram `audit_event` `sync.conflict_resolved` (INV-21). `op ∈ CREATE|UPDATE|DELETE`, `outcome ∈ APPLIED|MERGED|IGNORED_TOMBSTONE|REJECTED`. **R-09 (BE-004):** `resolution` (`NONE|MERGED|LWW_CLIENT_WON|LWW_SERVER_WON|DELETE_WINS|KEPT_BOTH`, nulo em `REJECTED`) guarda a resolução da primeira resposta para o `DUPLICATE` reproduzi-la.
 
 ### 6.5 Decisões do spike ARCH-003 refletidas no banco
 
@@ -140,7 +140,7 @@ Alternativas descartadas, caso o spike ARCH-003 prefira sequência global: (A) `
 | R-10 | `notes` 500 e `method_or_place` 80 (o contrato 1.0.1 manda; teste de contrato↔DDL); `volume_ml` segue `numeric(6,1)` (aceita o inteiro do contrato); `BottleFeedingData.volume_ml` obrigatório é validado na API (o CHECK de forma do ADR-0009 não o impõe). |
 | R-11 | **Só API**: `SLEEP_SCHEDULE_PREFERENCE` (banco/`change_log`) ↔ `SLEEP_PREFERENCES` (contrato); `SLEEP_PREDICTION` não está no `change_log` (derivada, INV-05) e `BABY.my_role` é por usuário (calculado de `caregiver_membership`). Nenhuma mudança de DDL. |
 | R-12 | **Só API**: grupos atômicos de campos no LWW; o banco apenas guarda as chaves em `field_versions`. |
-| Fora do pedido | R-09 (`resolution`/`result` em `sync_mutation`) e R-15 (cotas) **não** foram feitos aqui; seguem como recomendação do BE-004. |
+| Fora do pedido | R-09 foi feito no BE-004 (coluna `resolution` em `sync_mutation`; o `result jsonb` opcional não). R-15 (cotas) **não** exige DDL: a cota diária conta `sync_mutation` do dia (índice `(baby_id, received_at)`) e o teto de entidades usa `last_sequence` como limite superior antes de contar. |
 
 ## 7. Entitlements, flags e parâmetros (ADR-0005) [D]
 

@@ -1,15 +1,20 @@
-# Nina iOS (IOS-001)
+# Nina iOS (IOS-001 + IOS-002)
 
 App SwiftUI (iOS 17+) + Swift Package local `NinaCore` (modelos do contrato, cliente HTTP, repositórios, ViewModels).
+IOS-001: conta, bebê, cuidadores. **IOS-002: tracking offline-first** (sono com timer, mamada, mamadeira, fralda, bomba,
+despertares, timeline por dia, fila de mutações). A seção "IOS-002" abaixo é a que você precisa ler primeiro.
 
 > **ATENÇÃO: NADA DESTE CÓDIGO FOI COMPILADO NEM EXECUTADO.**
-> Foi escrito em um container Linux sem Xcode e sem `swift` (`which swift` retornou vazio). Nenhum `swift build`,
+> Foi escrito em um container Linux sem Xcode e sem `swift` (`which swift` retornou vazio, nas duas tarefas). Nenhum `swift build`,
 > `swift test`, `xcodegen` ou `xcodebuild` rodou. Espere erros de compilação pequenos na primeira vez (ver
 > "Pontos com maior risco de ajuste"). Os testes foram escritos, mas **nunca foram executados**: "passam" é uma hipótese até você rodar.
+> Nada do IOS-002 foi validado em compilador, simulador ou aparelho. Telas SwiftUI nunca foram vistas renderizadas.
 
 ## Escopo entregue
 
-Fonte: `specs/ux-spec.md`, `specs/product-spec.md` (RF-001..007), `contracts/openapi.yaml` v1.0.0 (congelado), `specs/api-spec.md`, ADR-0007/0009/0010.
+Fonte do IOS-001: `specs/ux-spec.md`, `specs/product-spec.md` (RF-001..007), `contracts/openapi.yaml` (congelado), `specs/api-spec.md`, ADR-0007/0009/0010.
+Fonte do IOS-002: ver a seção "IOS-002". O contrato congelado atual é a **v1.0.1** (a v1.0.0 citada no IOS-001 só difere por esclarecimentos de
+sync: ordem de resolução pelo servidor, `CLIENT_CLOCK_SKEW`, `ENTITY_ID_UNAVAILABLE`, cotas).
 
 | Tela / fluxo | Onde | RF |
 |---|---|---|
@@ -21,8 +26,8 @@ Fonte: `specs/ux-spec.md`, `specs/product-spec.md` (RF-001..007), `contracts/ope
 | Aceitar/recusar convite (prévia sem nome completo do bebê; link `nina://invite?token=`) | `Features/Caregivers/InvitationAcceptView.swift` | RF-007 |
 | Mais: cuidadores, aceitar convite, tema (Sistema/Claro/Noite), sair da conta | `Features/More` | UX §8 |
 
-Fora do escopo desta tarefa (não implementado): E5 rotina inicial, E6 primeiro registro, timer de sono, timeline, agenda, gráficos, paywall,
-sync (`/sync/push`, `/sync/pull`), push, exportar/excluir conta, sessões e dispositivos.
+Fora do escopo do IOS-001 (o IOS-002 entregou timer de sono e timeline; o resto continua fora): E5 rotina inicial, E6 primeiro registro guiado,
+agenda/previsão, gráficos, paywall, **motor de sync de rede (`/sync/push`, `/sync/pull`, Onda 5)**, push, exportar/excluir conta, sessões e dispositivos.
 
 ## Estrutura
 
@@ -32,6 +37,8 @@ ios/
   Packages/NinaCore/                  # Swift Package puro (sem UIKit/SwiftUI)
     Sources/NinaCore/
       Models/                         # Codable do OpenAPI: enums tolerantes, CivilDate, Baby, Membership, ...
+      Models/Tracking/                # IOS-002: TrackedEvent, EventDraft, enums de tracking, JSONValue, validação
+      Tracking/                       # IOS-002: fila, TrackingState, TrackingStore, EventRepository, Sync/ (wire + stub)
       Networking/                     # HTTPTransport (URLSession), Endpoint, APIClient (refresh single-flight)
       Storage/                        # TokenStore (Keychain / memória)
       Repositories/                   # Auth, Baby (+BabyCache), Caregiver, Consent: protocolo + implementação
@@ -39,8 +46,8 @@ ios/
       Design/DesignTokens.swift       # tokens do Nina DS v0 + contraste WCAG
     Tests/NinaCoreTests/              # XCTest com URLProtocol stub (zero rede real)
   App/Nina/                           # app SwiftUI
-    Theme/ Features/ Persistence/ Support/ Resources/ (pt-BR, en, es)
-  App/NinaTests/                      # testes do app (SwiftData em memória, paridade de localização, tema)
+    Theme/ Features/ (inclui Tracking/) Persistence/ Support/ Resources/ (pt-BR, en, es)
+  App/NinaTests/                      # testes do app (SwiftData em memória, paridade de localização, tema, tracking)
 ```
 
 ## Como abrir no Mac (passo a passo)
@@ -81,6 +88,140 @@ xcodebuild test -project Nina.xcodeproj -scheme Nina -destination 'platform=iOS 
 Se `iPhone 15` não existir na sua versão do Xcode, liste com `xcrun simctl list devices available` e troque o nome.
 `KeychainTokenStore` tem teste que se auto-ignora (`XCTSkip`) se o host de `swift test` não tiver Keychain (erro -34018); rode o item 2.
 
+## IOS-002: tracking offline-first
+
+Fonte: `specs/ux-spec.md` (2.1 metas de toques, 4.2 timer de sono, 4.3 alimentação/fralda/bomba, 4.4 timeline, 4.12/4.13 estados),
+`specs/product-spec.md` (RF-008..020, RF-046/047), `contracts/openapi.yaml` v1.0.1 (`/sync/push`, `/sync/pull`, `EventType`, `DiaperType`,
+`FeedingType`, `MilkType`, `WakeEvent`, `night_awakenings`), `specs/api-spec.md` (AD-08, AD-33, seção 3), ADR-0003 e ADR-0009.
+
+### O que foi entregue
+
+| Item | Onde | Observação |
+|---|---|---|
+| Modelo local de eventos (sono, mamada `BREASTFEEDING`/`BOTTLE`, bomba, fralda, `WakeEvent`) | `NinaCore/Models/Tracking` | `TrackedEvent` achatado, enums tolerantes (`.unknown(raw)`), `nil` = não se aplica |
+| Fila de mutações offline | `NinaCore/Tracking/MutationQueue.swift`, `TrackingState.swift` | UUID `mutation_id`, `client_created_at`, `base_version`, `device_id`, `entity_id`, estado (`pending`/`inFlight`/`rejected`), backoff, tombstone local |
+| Persistência | `NinaCore/Tracking/TrackingStore.swift` (protocolo + memória), `App/Nina/Persistence/SwiftDataTrackingStore.swift` | SwiftData atrás de `TrackingStore`; evento + mutação gravados em um único `save()` |
+| Repositório offline-first | `NinaCore/Tracking/EventRepository.swift` | escreve local primeiro, valida, papel (`ReadOnly` não escreve), nunca toca na rede |
+| ViewModels `@Observable` | `NinaCore/ViewModels/TrackingViewModel`, `EventFormViewModel`, `BreastfeedingTimerViewModel` | relógio injetado, fuso do bebê, desfazer 8 s |
+| `SyncEngine` (protocolo + **stub**), formato de rede do push, indicador de sync | `NinaCore/Tracking/Sync` | o motor real é a Onda 5 |
+| Telas | `App/Nina/Features/Tracking` + `Babies/HomeView` (Hoje) + `Babies/MainView` (abas) + `More/MoreView` | ver abaixo |
+| i18n pt-BR / en / es | `Resources/*.lproj` | 353 chaves idênticas nos 3 idiomas + 3 plurais novos no `.stringsdict` |
+| Testes | `NinaCoreTests/*` (fila, repositório, wire, DST, VMs, timer) e `NinaTests/*` (SwiftData, i18n, formatação) | **nunca executados** |
+
+Telas: **Hoje** (cartão "Agora" com cronômetro, resumo do dia, "Dormiu"/"Acordou" na base, "Foi antes…", "Registrar outro"), **timer de sono**
+(corrigir início -5/-10/-15/-30 ou hora exata, tipo, cancelar com confirmação, tela "Sono registrado" com ajuste do fim), **ação rápida** (5 botões por uso
+recente; fralda salva em 1 toque dentro da folha), **mamada** (escolhe o lado = inicia o timer, "Trocar de lado", "Terminar", ou manual), **mamadeira**
+(volume com stepper de 10 ml iniciando no último volume; tipo de leite só aqui), **fralda** (enum), **bomba** (volume opcional), **timeline por dia**
+(navegação de dia, chips Tudo/Sono/Comida/Fralda/Pumping, totais, vazio/erro/offline/sincronizando, marcador "Aguardando envio"), **detalhe/edição/exclusão**
+(confirmação + "Desfazer" 8 s; despertares da sessão podem ser adicionados/excluídos) e **Mais > Sincronização** (indicador + contador de pendências).
+
+### Como o offline-first funciona
+
+1. Toda ação grava **primeiro** no banco local: o evento (`syncStatus = pending`, `version = 0`) e a mutação correspondente, atomicamente
+   (`TrackingStore.create/update/delete`). Nada espera rede.
+2. A fila é ordenada por `sequence` local. `nextBatch` devolve até 100 mutações em ordem, respeitando: backoff (`nextAttemptAt`), mutação anterior da
+   mesma entidade ainda não enviável (não "fura a fila") e dependências (um `WAKE_EVENT` só sai depois do `CREATE` da sessão de sono).
+3. `base_version` é **prevista**: versão confirmada + mutações da entidade já na fila (criar + parar timer = `CREATE` base 0, `UPDATE` base 1, igual ao
+   exemplo do contrato). Quando uma mutação é confirmada, as seguintes da mesma entidade são re-baseadas (`MutationQueueState.markApplied`).
+4. Idempotência: reenfileirar o mesmo `mutation_id` não duplica; o `mutation_id` nunca muda entre tentativas; mutação "em voo" que sobrou de queda do
+   app volta a `pending` (`recoverInFlight`, chamado na abertura) e o reenvio é seguro (`DUPLICATE`).
+5. Excluir: se a criação **nunca saiu do aparelho**, descarta evento + mutações (nenhum `DELETE`). Senão, tombstone local (some das telas) + `DELETE` retido por
+   8 s (janela do "Desfazer"); o evento só é removido quando o servidor confirma. Excluir um sono esconde os despertares dele (o servidor apaga em cascata).
+6. `TrackingState.apply(PushItemResult)` já sabe reconciliar `APPLIED`/`DUPLICATE` (versão, `synced`), `REJECTED` com `retryable=true` (backoff),
+   `REJECTED` definitivo (fica visível como "Não enviado" até o usuário descartar) e `ENTITY_DELETED`/`ENTITY_NOT_FOUND` em exclusão (idempotente).
+   `SyncWire.pushBody` monta o corpo do `POST /sync/push` e `PushResponse` decodifica a resposta (status/resolução desconhecidos não derrubam).
+7. Sessão encerrada pelo servidor **não** apaga a fila (RF-001-A4). Logout explícito apaga eventos e fila (aparelho compartilhado; evita enviar dados de uma
+   conta em outra) e a confirmação avisa quantos registros ainda não foram enviados.
+
+### O que NÃO foi feito (de propósito ou por limite)
+
+- **Motor de sync de rede (Onda 5).** `StubSyncEngine.syncNow` devolve `.notImplemented`: **nada é enviado nem recebido**; todo registro fica "Aguardando envio" e
+  "Tentar agora" só zera o backoff. Faltam: push/pull reais, aplicar resultados do push com a entidade canônica (`entity`), pull por cursor (snapshot/delta/tombstone,
+  `410 SYNC_CURSOR_EXPIRED` preservando a fila, `403 ACCESS_REVOKED` apagando o bebê), `Retry-After`/`429`, reconciliação de conflitos (sheet "Qual versão manter?"),
+  `warnings` (`SLEEP_OVERLAP`, `OPEN_SLEEP_EXISTS`, `CLIENT_CLOCK_SKEW` com aviso de relógio do UX 4.13), `ENTITY_ID_UNAVAILABLE` (gerar novo UUID) e disparo por
+  conectividade/background. Os pontos de encaixe estão documentados em `SyncEngine.swift` e `TrackingState.apply`.
+- Pull do servidor não existe: eventos criados por outros cuidadores/aparelhos **não aparecem**; `night_awakenings` e autoria `created_by` só viriam do pull.
+- Histórico de alterações do evento (`GET /events/{id}/history`, RF-020): mostrado apenas "última alteração por/às" local.
+- Previsão/agenda, gráficos, unidades ml/oz (só ml), preferência de "último bebê", notificações.
+- Aviso de sono sobreposto/ajuste do outro registro (UX 4.2) e conflito de timers entre aparelhos: dependem do servidor/sync.
+- Dados de bebê excluídos por `ACCESS_REVOKED` ainda ficam em disco (a lista deixa de mostrar o bebê); a limpeza dos eventos dele é da Onda 5.
+
+### Premissas e lacunas do IOS-002 (decidir/validar)
+
+1. **Mamada por lado = uma sessão por lado.** O contrato não guarda duração por lado; "Trocar de lado" no timer grava uma `FEEDING_SESSION` por lado, cada uma
+   com `end_at` (obrigatório, ADR-0010). O timer de mamada vive só no aparelho (UserDefaults), como o contrato pede, e sobrevive ao app fechado.
+2. **Tipo de sono sugerido (soneca x noturno):** 19:00-05:59 no fuso do bebê = noturno, senão soneca (`SleepTypeRule`). É premissa: a rotina inicial (E5) não existe.
+   Sempre editável.
+3. **Dia de um sono que cruza a meia-noite:** conta no dia do **início** (D-13 segue em aberto). O dia de cada evento usa o `tz` gravado nele (RF-010-A8); fuso
+   inválido cai no fuso do bebê. Totais só somam sonos **fechados**; o em andamento não entra (RF-010-A6).
+4. **`night_awakenings`:** só exibido quando vier do servidor e for > 0; o app **não** deriva "0 = acompanhamento suficiente" (critério é parâmetro editável do servidor).
+5. **Volume:** limites locais 1..5000 ml (teto do contrato). O limite efetivo (`limits.bottle_volume_ml_max` de `/reference-data`) ainda não é consumido.
+6. **Horário futuro:** recusado além de 5 min (tolerância de relógio). Fim <= início é recusado (mamadeira aceita fim = início).
+7. **Sem fuso/horário de verão no armazenamento:** instantes em UTC (segundos), fuso IANA do evento ao lado; dias de 23/25 h tratados por `DayCalendar` (testado com
+   America/New_York e o dia sem meia-noite de São Paulo em 2018).
+8. **Timer longo:** pergunta "ainda está dormindo?" após 6 h (constante em `TrackingViewModel.longSleepThreshold`; ainda não configurável).
+9. **Desfazer exclusão** só vale enquanto o `DELETE` não foi enviado (retido 8 s). Desfazer a exclusão de um registro descartado (nunca enviado) o recria com o mesmo id,
+   mas **não** recria os despertares dele.
+10. **Fila e logout:** a fila é apagada no logout explícito. Se você preferir manter para reenvio após novo login (mesma conta), é uma decisão de produto/privacidade.
+11. Papel desconhecido ou `READ_ONLY` não escreve (botões de registro somem e há aviso). Autor (`created_by`) local usa o nome do usuário atual; o servidor reatribui no sync.
+12. O mesmo `ModelContainer` guarda cache de bebês **e** a fila. `LocalStore.makeContainer` ainda cai para memória se o arquivo estiver corrompido: nesse caso registros pendentes
+    **somem em silêncio no próximo fechamento do app**. Antes de produção, trocar por falha explícita/recuperação e considerar `NSFileProtectionComplete`.
+
+### Pontos com maior risco de compilação (IOS-002)
+
+Além da lista do IOS-001 (abaixo), apostaria nestes:
+
+- `@Observable @MainActor` com `init` que atribui muitas propriedades antes de usar `self` (`EventFormViewModel.init`, `TrackingViewModel.init`).
+- Closures `[self] in` passadas a `write(undoMessage:_:)` (async, não escapante) retornando tuplas `(TrackedEvent, UndoAction.Kind?)` com membro implícito (`.created(...)`).
+- `@ModelActor actor SwiftDataTrackingStore: TrackingStore`: assinaturas `async throws` sem `await` interno (avisos), `#Predicate` com `Optional<UUID>` (`sleepSessionId == target`),
+  genérico `transact<Result>(eventIds:_:)` com closure `inout`, tupla nomeada devolvida por `TrackingState.changes(from:)`.
+- `JSONValue` (`Codable` à mão) e atribuições `data["x"] = .instant(...)` em `[String: JSONValue]` (membro estático via `Optional`).
+- `Date.FormatStyle`/`DateFormatter.setLocalizedDateFormatFromTemplate` e `DateComponentsFormatter` (apenas no app, `EventFormatting`).
+- SwiftUI: `@Bindable var vm = viewModel` dentro de `body`, `Picker` com `Optional` + `.tag(Optional(x))`, `DatePicker(..., in: ...date)` com `.environment(\.timeZone, ...)`,
+  `Text(LocalizedStringKey(...))`, `NavigationLink(value:)` + `navigationDestination(for: QuickAction.self)` dentro de sheet, `.onChange(of:initial:)` de 2 parâmetros,
+  `TimelineView(.periodic(from:by:))` dentro de `@ViewBuilder`.
+- Símbolos SF usados (`moon.zzz.fill`, `icloud.slash`, `exclamationmark.icloud`, `checkmark.icloud`, `arrow.triangle.2.circlepath`, `list.bullet.rectangle`): se algum não existir na sua versão, troque em `EventFormatting.symbol` / `TrackingComponents`.
+- `Package.swift` não mudou; os testes novos usam `@testable import NinaCore` (já era o padrão).
+
+### O que verificar no Mac (IOS-002)
+
+Comandos (nesta ordem; pare no primeiro erro de compilação e me mande a saída):
+
+```bash
+cd ios/Packages/NinaCore
+swift build 2>&1 | head -80          # compila só o core (sem UIKit/SwiftUI)
+swift test 2>&1 | tail -80           # IOS-001 + IOS-002 (fila, repositório, wire, DST, ViewModels, timer)
+swift test --filter MutationQueueTests    # idempotência de UUID, ordem, retry/backoff
+swift test --filter EventRepositoryTests  # escrita local primeiro, base_version prevista, tombstone/desfazer
+swift test --filter TimeSupportTests      # DST 23 h / 25 h e dia sem meia-noite
+
+cd ..   # ios/
+xcodegen generate
+xcodebuild test -project Nina.xcodeproj -scheme Nina \
+  -destination 'platform=iOS Simulator,name=iPhone 15' \
+  -only-testing:NinaTests/SwiftDataTrackingStoreTests \
+  -only-testing:NinaTests/TrackingLocalizationTests \
+  -only-testing:NinaTests/EventFormattingTests
+```
+
+Checklist de comportamento (simulador, sem backend: o stub de sync não faz rede, então tudo fica "Aguardando envio"):
+
+- [ ] Hoje: sem registros mostra o estado vazio; "Dormiu" (1 toque) inicia o cronômetro; fechar e reabrir o app continua contando do início persistido (RF-009-A4).
+- [ ] "Acordou" para o timer, abre "Sono registrado" e o toast "Desfazer" some em 8 s; "Desfazer" reabre o timer.
+- [ ] "Foi antes…" (-5/-10/-15/-30 e "Escolher hora…") no início e no fim; segundo "Dormiu" com timer aberto é recusado com aviso.
+- [ ] Modo avião: tudo continua funcionando; faixa "Sem conexão" e contador "N registros aguardando envio"; força-fechar o app e reabrir mantém os registros e a fila.
+- [ ] Mamada: Esquerdo/Direito inicia; "Trocar de lado"; "Terminar" cria uma sessão por lado com fim; manual exige lado e fim; sair da tela e voltar mantém o timer.
+- [ ] Mamadeira: stepper de 10 ml começa no último volume; tipo de leite aparece **só** em mamadeira. Fralda: 1 toque no tipo dentro da folha. Bomba: volume opcional.
+- [ ] Timeline: chips de filtro, dia anterior/seguinte, dia vazio ("Nenhum registro neste dia"), marcador "Aguardando envio", abrir detalhe, editar (hora/duração/tipo/observação),
+      excluir com confirmação + "Desfazer", adicionar/excluir despertar em um sono.
+- [ ] ReadOnly (convite como "somente leitura"): botões de registro somem e há aviso; não há como criar/editar/excluir.
+- [ ] Mudar o fuso do aparelho/bebê e a data para o dia de horário de verão: dias de 23/25 h, "Hoje" e totais corretos; sono que cruza a meia-noite conta no dia do início.
+- [ ] Mais > Sincronização mostra contagem; logout com pendências avisa o número e apaga fila e eventos.
+- [ ] Acessibilidade: VoiceOver (linha de evento fala tipo, horário, duração, estado de envio; cronômetro fala em minutos, não por segundo; stepper de volume ajustável;
+      "Desfazer" alcançável), Dynamic Type até AX5 (botões da base e chips não truncam; `AdaptiveStack` vira coluna), modo escuro/"Noite", "Reduzir movimento".
+- [ ] Idiomas pt-BR/en/es: textos novos, plurais de "registro(s) aguardando envio", horários no formato do locale.
+- [ ] Inspecionar o SQLite do app (ou `po` no depurador): `CachedMutation` com `sequence` crescente, `CachedEvent.payload` com enums desconhecidos preservados.
+
 ## Decisões
 
 ### Persistência local: SwiftData (por trás de `BabyCache`)
@@ -92,7 +233,11 @@ Escolha: **SwiftData**. Motivos:
 - Guardamos o **JSON do contrato** (`Baby`) numa coluna `payload`, e não cada campo. Campos novos aditivos da API (regra de congelamento v1) não exigem migração de esquema no aparelho, e enums desconhecidos sobrevivem à ida e volta.
 - `@ModelActor` dá contexto próprio fora da main thread, e a interface `BabyCache` (async) esconde o framework: testes do core usam `InMemoryBabyCache`.
 
-Trade-off honesto: a fila de mutações e o change log do ADR-0003 (`/sync/push`, `/sync/pull`, cursor, tombstones, ordenação) vão pedir consultas ordenadas, transações e migrações mais controladas. Se o spike de sync mostrar que SwiftData limita (predicados, migração, controle de transação, depuração do SQLite), **GRDB** é a alternativa; a troca fica restrita a `Persistence/` porque o resto só conhece `BabyCache`. Não adotei GRDB já agora para não puxar dependência por um cache simples.
+Atualização IOS-002: a fila de mutações e os eventos entraram no mesmo SwiftData (`CachedEvent`, `CachedMutation`), com o JSON completo em `payload` e colunas só para consulta.
+A lógica de fila/tombstone é código puro (`TrackingState`) testado fora do SwiftData; o SwiftData só carrega linhas, aplica a operação e grava a diferença num único `save()`.
+Se o spike de sync da Onda 5 mostrar limites (transações, desempenho de `loadQueue` que hoje lê a fila inteira a cada operação, migração), a troca por GRDB continua restrita a `Persistence/`.
+
+Trade-off honesto (IOS-001): a fila de mutações e o change log do ADR-0003 (`/sync/push`, `/sync/pull`, cursor, tombstones, ordenação) vão pedir consultas ordenadas, transações e migrações mais controladas. Se o spike de sync mostrar que SwiftData limita (predicados, migração, controle de transação, depuração do SQLite), **GRDB** é a alternativa; a troca fica restrita a `Persistence/` porque o resto só conhece `BabyCache`. Não adotei GRDB já agora para não puxar dependência por um cache simples.
 
 Proteção em disco: o armazenamento do app usa a classe de proteção padrão do iOS (`CompleteUntilFirstUserAuthentication`). Considere `NSFileProtectionComplete` para o arquivo do SwiftData quando o sync existir. Ao fazer logout, o cache de bebês é apagado.
 
@@ -121,7 +266,7 @@ O app **não calcula nem persiste** idade corrigida. Exibe `age` (ou, se faltar,
 - Tokens de `ux-spec §6.1` em `DesignTokens.swift` (claro + "Noite"), mapeados para `Color` dinâmico. Teste de contraste no core (texto >= 4,5:1; eventos/foco >= 3:1). Resultado da conta feita à mão: todos os pares de texto/estado passam; `border/subtle` (1,3:1 claro / 1,5:1 escuro) **não** serve como borda de campo, então os campos usam `text/secondary` (>= 3:1).
 - Texto em *text styles* (escala com Dynamic Type; `AdaptiveStack` vira coluna nos tamanhos de acessibilidade); botões quebram linha em vez de truncar; alvos >= 48 pt (primário 56).
 - Erros sempre com ícone + texto; cor nunca é o único sinal. Cabeçalhos marcados para o rotor. Linhas de cuidadores expõem as ações como *custom actions* do VoiceOver. "Reduzir movimento" respeitado.
-- Localização: `Localizable.strings` + `Localizable.stringsdict` (plural de idade) em **pt-BR (idioma de desenvolvimento)**, **en** e **es**; mesmas 174 chaves nos três (teste de paridade em `LocalizationTests`). Textos de es/en são traduções minhas sem revisão nativa.
+- Localização: `Localizable.strings` + `Localizable.stringsdict` (plural de idade) em **pt-BR (idioma de desenvolvimento)**, **en** e **es**; mesmas chaves nos três (hoje 353; teste de paridade em `LocalizationTests`). Textos de es/en são traduções minhas sem revisão nativa.
 - Copy segue o ux-spec §11 (voz calma, sem alarmismo, erro = o que houve + o que fazer).
 
 ## Premissas e lacunas do contrato (decidir/validar)

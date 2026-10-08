@@ -1,6 +1,6 @@
 # Backend (.NET 10)
 
-Solucao `Nina.sln` — monolito modular + BFF (ADR-0001, ADR-0002). Modulo Identity implementado (BE-001); demais modulos so com estrutura.
+Solucao `Nina.sln` — monolito modular + BFF (ADR-0001, ADR-0002). Modulos Identity (BE-001) e Family (BE-002: bebes, cuidadores, convites, papeis, propriedade) implementados; demais modulos conforme suas tarefas.
 
 ```
 backend/
@@ -19,6 +19,7 @@ backend/
     Nina.Api.Tests/       xUnit + WebApplicationFactory
     Nina.Bff.Tests/       xUnit + WebApplicationFactory (API simulada): encaminhamento e superficie publica
     Nina.Identity.Tests/  unidade + integracao contra PostgreSQL 16 real e temporario (initdb, porta alta, removido ao final)
+    Nina.Family.Tests/    idem para Family: CRUD de bebe, convites, papeis, propriedade, IDOR por endpoint, 429 (e-mail fake)
 ```
 
 Os caminhos `src/Nina.Api` e `src/Nina.Bff` casam com `infra/docker/Dockerfile.service` (`--build-arg PROJECT=Nina.Api|Nina.Bff`) e `docker-compose.yml`.

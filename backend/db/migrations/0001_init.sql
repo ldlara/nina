@@ -789,6 +789,9 @@ CREATE TABLE nina.sync_mutation (   -- idempotencia do push (INV-18); sem payloa
   outcome           text NOT NULL CHECK (outcome IN ('APPLIED', 'MERGED', 'IGNORED_TOMBSTONE', 'REJECTED')),
   result_version    bigint,
   reject_code       text CHECK (length(reject_code) <= 64),
+  -- R-09: a resolucao devolvida na primeira resposta; o reenvio (DUPLICATE) a reproduz sem recalcular. Nulo em REJECTED.
+  resolution        text CHECK (resolution IN ('NONE', 'MERGED', 'LWW_CLIENT_WON', 'LWW_SERVER_WON', 'DELETE_WINS', 'KEPT_BOTH')),
+  CONSTRAINT sync_mutation_resolution_ck CHECK (resolution IS NULL OR outcome <> 'REJECTED'),
   PRIMARY KEY (user_id, device_id, mutation_id)
 );
 CREATE INDEX sync_mutation_baby_ix ON nina.sync_mutation (baby_id, received_at);

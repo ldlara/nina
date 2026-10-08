@@ -65,3 +65,32 @@ object FeedingTypeSerializer : TolerantEnumSerializer<FeedingType>("FeedingType"
 @Serializable(with = MilkTypeSerializer::class)
 enum class MilkType { BREAST_MILK, FORMULA, MIXED, OTHER, UNSPECIFIED, UNRECOGNIZED }
 object MilkTypeSerializer : TolerantEnumSerializer<MilkType>("MilkType", MilkType.entries, MilkType.UNRECOGNIZED)
+
+// ---- Tracking (AND-002) --------------------------------------------------------------------------------------------
+
+@Serializable(with = BreastSideSerializer::class)
+enum class BreastSide { LEFT, RIGHT, BOTH, UNRECOGNIZED }
+object BreastSideSerializer : TolerantEnumSerializer<BreastSide>("BreastSide", BreastSide.entries, BreastSide.UNRECOGNIZED)
+
+@Serializable(with = SleepTypeSerializer::class)
+enum class SleepType { NAP, NIGHT, UNRECOGNIZED }
+object SleepTypeSerializer : TolerantEnumSerializer<SleepType>("SleepType", SleepType.entries, SleepType.UNRECOGNIZED)
+
+/** `source` de `SleepSession`: iniciada pelo timer ou registrada à mão (RF-009-A7). */
+@Serializable(with = SleepSourceSerializer::class)
+enum class SleepSource { TIMER, MANUAL, UNRECOGNIZED }
+object SleepSourceSerializer : TolerantEnumSerializer<SleepSource>("SleepSource", SleepSource.entries, SleepSource.UNRECOGNIZED)
+
+@Serializable(with = WakeSourceSerializer::class)
+enum class WakeSource { MANUAL, INFERRED, IMPORT, UNRECOGNIZED }
+object WakeSourceSerializer : TolerantEnumSerializer<WakeSource>("WakeSource", WakeSource.entries, WakeSource.UNRECOGNIZED)
+
+/** `SyncEntityType` do contrato (entidades que o cliente escreve via `/sync/push`). */
+@Serializable(with = SyncEntityTypeSerializer::class)
+enum class SyncEntityType { SLEEP_SESSION, FEEDING_SESSION, PUMPING_SESSION, DIAPER_EVENT, WAKE_EVENT, UNRECOGNIZED }
+object SyncEntityTypeSerializer :
+    TolerantEnumSerializer<SyncEntityType>("SyncEntityType", SyncEntityType.entries, SyncEntityType.UNRECOGNIZED)
+
+@Serializable(with = MutationOpSerializer::class)
+enum class MutationOp { CREATE, UPDATE, DELETE, UNRECOGNIZED }
+object MutationOpSerializer : TolerantEnumSerializer<MutationOp>("MutationOp", MutationOp.entries, MutationOp.UNRECOGNIZED)

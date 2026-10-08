@@ -1,0 +1,97 @@
+{
+  "name": "F_sparse_history",
+  "description": "Um \u00FAnico registro: segue na baseline por idade.",
+  "as_of": "2026-10-08T12:30:00.0000000\u002B00:00",
+  "request": {
+    "Baby": {
+      "BirthDate": "2026-06-30",
+      "DueDate": null,
+      "TimeZoneId": "America/Sao_Paulo"
+    },
+    "History": [
+      {
+        "Id": "00000000-0000-0000-0000-000000000001",
+        "StartAt": "2026-10-08T11:00:00\u002B00:00",
+        "EndAt": "2026-10-08T11:50:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      }
+    ],
+    "Preferences": null
+  },
+  "expected": {
+    "Status": "Available",
+    "DisclaimerKey": "prediction.estimate_not_diagnosis",
+    "Predictions": [
+      {
+        "Kind": "NextNap",
+        "PredictedStart": "2026-10-08T13:20:00\u002B00:00",
+        "PredictedEnd": "2026-10-08T13:50:00\u002B00:00",
+        "Confidence": "Low",
+        "ConfidenceScore": 0,
+        "Explanation": {
+          "Key": "prediction.explain.age_only",
+          "Params": {
+            "age_basis": "CHRONOLOGICAL",
+            "age_months": 3,
+            "anchor_assumed": false,
+            "typical_wake_minutes": 105
+          }
+        },
+        "BaselineOnly": true
+      },
+      {
+        "Kind": "Bedtime",
+        "PredictedStart": "2026-10-08T22:23:00\u002B00:00",
+        "PredictedEnd": "2026-10-08T23:37:00\u002B00:00",
+        "Confidence": "Low",
+        "ConfidenceScore": 0,
+        "Explanation": {
+          "Key": "prediction.explain.bedtime_age_only",
+          "Params": {
+            "age_basis": "CHRONOLOGICAL",
+            "age_months": 3,
+            "naps_today": 1,
+            "typical_bedtime_local": "20:00"
+          }
+        },
+        "BaselineOnly": true
+      }
+    ],
+    "StatusExplanation": null,
+    "ModelVersion": "rules-2026.10.1",
+    "ReferenceTableVersion": "0.1.0-draft",
+    "ReferenceTableHash": "31dbf0563eedae32",
+    "ReferenceTableIsDraft": true,
+    "ComputedAt": "2026-10-08T12:30:00\u002B00:00",
+    "InputsFingerprint": "def60a88725052b1",
+    "Age": {
+      "ChronologicalDays": 100,
+      "CorrectedDays": null,
+      "CorrectionApplied": false,
+      "EffectiveDays": 100,
+      "Basis": "CHRONOLOGICAL"
+    },
+    "Plan": {
+      "ExpectedNapCount": 4,
+      "NapCountSource": "AGE",
+      "NapsCompletedToday": 1,
+      "BedtimeRangeFromMinuteOfDay": 1140,
+      "BedtimeRangeToMinuteOfDay": 1290,
+      "PreferencesApplied": false
+    },
+    "DataQuality": {
+      "ValidSessions": 1,
+      "IgnoredInvalid": 0,
+      "IgnoredTooShort": 0,
+      "IgnoredTooLong": 0,
+      "IgnoredFuture": 0,
+      "MergedOverlaps": 0,
+      "OpenSessionIgnored": false,
+      "TimezoneChangedInHistory": false,
+      "WakeWindowObservations": 0,
+      "WakeWindowOutliers": 0,
+      "DaysUsed": 1
+    }
+  }
+}

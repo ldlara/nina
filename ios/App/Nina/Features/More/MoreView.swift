@@ -5,6 +5,7 @@ import NinaCore
 struct MoreView: View {
     let container: AppContainer
     @Bindable var babies: BabiesViewModel
+    @Bindable var tracking: TrackingViewModel
     @Binding var pendingInviteToken: String?
     @AppStorage(ThemePreference.storageKey) private var themeRaw = ThemePreference.system.rawValue
     @State private var showingInviteEntry = false
@@ -26,6 +27,10 @@ struct MoreView: View {
 
                 Section {
                     Button { showingInviteEntry = true } label: { Label("more.accept_invite", systemImage: "envelope.open") }
+                }
+
+                Section("more.sync") {
+                    SyncStatusBar(tracking: tracking, showWhenSynced: true)
                 }
 
                 Section("more.appearance") {
@@ -53,7 +58,12 @@ struct MoreView: View {
                 Button("more.logout", role: .destructive) { Task { await container.session.logout() } }
                 Button("common.cancel", role: .cancel) {}
             } message: {
-                Text("more.logout.message")
+                // Registros ainda não enviados são apagados junto com a sessão: avisar antes (aparelho compartilhado).
+                if tracking.queue.pending > 0 {
+                    Text(LocalizedMessage.plural("more.logout.pending_warning", count: tracking.queue.pending))
+                } else {
+                    Text("more.logout.message")
+                }
             }
         }
     }

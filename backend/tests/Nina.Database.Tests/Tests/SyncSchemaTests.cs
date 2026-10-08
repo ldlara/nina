@@ -176,6 +176,30 @@ public sealed class SyncSchemaTests(PgCluster cluster) : DbTestBase(cluster)
         Assert.Equal("42501", await FailsAsync(Role.App, W.Erin, Insert(W.Erin, W.BabyA, "ON CONFLICT DO NOTHING")));
     }
 
+    // ------------------------------------------------------------------ R-09 (BE-004)
+
+    [Fact]
+    public async Task R09_sync_mutation_stores_the_resolution_so_a_duplicate_replays_it_and_a_rejection_never_has_one()
+    {
+        var device = Guid.NewGuid();
+        string Insert(string outcome, string resolution) =>
+            $"INSERT INTO nina.sync_mutation (mutation_id, baby_id, user_id, device_id, entity_type, entity_id, op, client_created_at, outcome, resolution) " +
+            $"VALUES (gen_random_uuid(), '{W.BabyA}', '{W.Erin}', '{device}', 'SLEEP_SESSION', gen_random_uuid(), 'CREATE', now(), '{outcome}', {resolution})";
+
+        Assert.Equal("text|YES", await OwnerScalarAsync<string>(
+            "SELECT data_type || '|' || is_nullable FROM information_schema.columns WHERE table_schema = 'nina' AND table_name = 'sync_mutation' AND column_name = 'resolution'"));
+        foreach (var resolution in new[] { "NONE", "MERGED", "LWW_CLIENT_WON", "LWW_SERVER_WON", "DELETE_WINS", "KEPT_BOTH" })
+        {
+            Assert.Null(await FailsAsync(Role.App, W.Erin, Insert("MERGED", $"'{resolution}'")));
+        }
+
+        Assert.Null(await FailsAsync(Role.App, W.Erin, Insert("APPLIED", "NULL")));                      // linhas antigas/sem resolucao continuam validas
+        Assert.Equal("23514", await FailsAsync(Role.App, W.Erin, Insert("APPLIED", "'WHATEVER'")));
+        Assert.Null(await FailsAsync(Role.App, W.Erin, Insert("REJECTED", "NULL")));
+        Assert.Equal("23514", await FailsAsync(Role.App, W.Erin, Insert("REJECTED", "'NONE'")));         // rejeicao nao tem resolucao
+        Assert.Equal("42501", await FailsAsync(Role.App, W.Erin, Insert("APPLIED", "'NONE'").Replace(W.Erin.ToString(), W.Alice.ToString(), StringComparison.Ordinal)));   // nem em nome de outro
+    }
+
     // ------------------------------------------------------------------ R-05
 
     [Fact]
