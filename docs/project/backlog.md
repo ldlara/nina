@@ -10,16 +10,16 @@ EPIC-001 Descoberta/fundação · 002 Identidade · 003 Família/bebê · 004 Tr
 | ID | Tarefa | Prior. | Compl. | Agente | Dependências | Paralela | Status |
 |---|---|---|---|---|---|---|---|
 | PRODUCT-001 | MVP, outcome, priorização | P0 | S | product-owner | — | não | Done (escopo em specification.md) |
-| REQ-001 | Product spec, glossário, critérios de aceite | P0 | M | requirements-analyst | PRODUCT-001 | não | Ready |
+| REQ-001 | Product spec, glossário, critérios de aceite | P0 | M | requirements-analyst | PRODUCT-001 | não | In Review |
 | ARCH-001 | Arquitetura + ADRs (sync, auth, tenancy) | P0 | L | backend-architect | REQ-001 | não | In Progress (ADR-0001..0004 propostos) |
 | ARCH-002 | Arquitetura iOS/Android (estado, offline) | P0 | M | frontend-architect | ARCH-001 | com ARCH-003 | Backlog |
 | ARCH-003 | Spike de sync (2 dispositivos, conflito) | P0 | M | backend-architect + dotnet | ARCH-001 | com ARCH-002 | Backlog |
 | DB-001 | Modelo de dados e migrations | P0 | M | database-engineer | ARCH-001 | não | Backlog |
 | API-001 | Contratos OpenAPI (auth, baby, tracking, sync, sleep) | P0 | L | api-contract-engineer | ARCH-001, DB-001 | não | Backlog |
-| UX-001 | Fluxos, wireframes, design system | P1 | L | ux-ui-designer | REQ-001 | com ARCH-001 | Backlog |
+| UX-001 | Fluxos, wireframes, design system | P1 | L | ux-ui-designer | REQ-001 | com ARCH-001 | In Review |
 | CLOUD-001 | Repo, CI/CD, ambientes, IaC | P0 | M | cloud-backend-engineer | ARCH-001 | com DB-001 | Backlog |
-| QA-001 | Estratégia de testes e aceite | P0 | M | software-quality-engineer | REQ-001 | com UX-001 | Backlog |
-| PRIV-001 | RIPD, consentimentos, retenção, DSAR | P0 | M | privacy-compliance-reviewer | REQ-001 | com ARCH-001 | Backlog |
+| QA-001 | Estratégia de testes e aceite | P0 | M | software-quality-engineer | REQ-001 | com UX-001 | In Review |
+| PRIV-001 | RIPD, consentimentos, retenção, DSAR | P0 | M | privacy-compliance-reviewer | REQ-001 | com ARCH-001 | In Review |
 | BE-001 | Identity: conta, sessão, recuperação, sessões/dispositivos | P0 | L | dotnet | API-001, DB-001 | com BE-002 | Backlog |
 | BE-002 | Família: bebê, cuidadores, papéis, convites, revogação | P0 | L | dotnet | API-001, DB-001 | com BE-001 | Backlog |
 | BE-003 | Tracking: sono, mamada, mamadeira, fralda, pumping, timeline | P0 | L | dotnet | BE-002 | não | Backlog |
