@@ -332,11 +332,14 @@ public sealed class SyncSchemaTests(PgCluster cluster) : DbTestBase(cluster)
         Assert.Equal("NN002", await FailsAsync(Role.App, W.Erin, $"UPDATE nina.sleep_session SET deleted_at = NULL WHERE baby_id = '{W.BabyA}' AND id = '{id}'"));
         Assert.Equal("NN002", await FailsAsync(Role.App, W.Erin, $"UPDATE nina.sleep_session SET notes = 'volta' WHERE baby_id = '{W.BabyA}' AND id = '{id}'"));
 
-        // soft delete do bebe pelo Owner: o conteudo e anulado no mesmo UPDATE (CHECK baby_content_ck) e vira tombstone no feed
-        Assert.Equal("23514", await FailsAsync(Role.App, W.Alice, $"UPDATE nina.baby SET deleted_at = now() WHERE id = '{W.BabyA}'"));
+        // NR-07: a exclusao do bebe nao e mais um UPDATE de deleted_at (coluna fora do GRANT do app; gatilho NN052 para qualquer outro papel):
+        // so nina.delete_baby (reautenticacao BABY_DELETE, auditoria, aviso aos cuidadores). O tombstone do bebe entra no feed.
+        Assert.Equal("42501", await FailsAsync(Role.App, W.Alice, $"UPDATE nina.baby SET deleted_at = now(), display_name = NULL, birth_date = NULL, field_versions = '{{}}' WHERE id = '{W.BabyA}'"));
+        Assert.Equal("NN052", await FailsAsync(Role.Owner, null, $"UPDATE nina.baby SET deleted_at = now(), display_name = NULL, birth_date = NULL, field_versions = '{{}}' WHERE id = '{W.BabyA}'"));
+        var reauth = await ReauthAsync(W.Alice, "BABY_DELETE");
         await using (var alice = await AsApp(W.Alice))
         {
-            await alice.ExecAsync($"UPDATE nina.baby SET deleted_at = now(), display_name = NULL, birth_date = NULL, field_versions = '{{}}' WHERE id = '{W.BabyA}'");
+            await alice.ExecAsync("SELECT nina.delete_baby(@b, @h, true)", P("b", W.BabyA), Bytes("h", reauth));
             await alice.CommitAsync();
         }
 
@@ -352,7 +355,8 @@ public sealed class SyncSchemaTests(PgCluster cluster) : DbTestBase(cluster)
             INSERT INTO nina.recovery_request (user_id, token_hash, expires_at) VALUES ('{W.Alice}', decode(repeat('01', 32), 'hex'), now() - interval '8 days'), ('{W.Alice}', decode(repeat('02', 32), 'hex'), now() + interval '1 day');
             INSERT INTO nina.email_verification_code (user_id, code_hash, created_at, expires_at) VALUES ('{W.Alice}', decode(repeat('03', 32), 'hex'), now() - interval '9 days', now() - interval '8 days');
             INSERT INTO nina.email_change_request (user_id, new_email, code_hash, created_at, expires_at) VALUES ('{W.Bob}', 'b2@example.org', decode(repeat('04', 32), 'hex'), now() - interval '9 days', now() - interval '8 days');
-            INSERT INTO nina.reauth_jti (jti_hash, user_id, scope, consumed_at, expires_at) VALUES (decode(repeat('05', 32), 'hex'), '{W.Alice}', 'ACCOUNT_DELETE', now() - interval '3 days', now() - interval '2 days');
+            INSERT INTO nina.reauth_jti (jti_hash, user_id, session_id, scopes, issued_at, consumed_at, consumed_scope, expires_at)
+              VALUES (decode(repeat('05', 32), 'hex'), '{W.Alice}', gen_random_uuid(), ARRAY['ACCOUNT_DELETE'], now() - interval '3 days', now() - interval '3 days', 'ACCOUNT_DELETE', now() - interval '3 days' + interval '5 minutes');
             INSERT INTO nina.auth_session (user_id, device_id, platform, absolute_expires_at, revoked_at, revoked_reason) VALUES ('{W.Alice}', gen_random_uuid(), 'IOS', now() - interval '40 days', now() - interval '40 days', 'LOGOUT');
             INSERT INTO nina.data_export_request (user_id, status, requested_at, expires_at) VALUES ('{W.Alice}', 'EXPIRED', now() - interval '120 days', now() - interval '113 days');
             """);
