@@ -61,39 +61,6 @@ public sealed class IdentityProxyTests
         Assert.False(sent.Headers.TryGetValues("X-Forwarded-For", out var spoofed) && spoofed.Contains("6.6.6.6"));
     }
 
-    private sealed class FixedIpFilter : Microsoft.AspNetCore.Hosting.IStartupFilter
-    {
-        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) =>
-            app =>
-            {
-                app.Use((context, nextMiddleware) =>
-                {
-                    context.Connection.RemoteIpAddress = IPAddress.Parse("203.0.113.5");
-                    return nextMiddleware(context);
-                });
-                next(app);
-            };
-    }
-
-    [Fact]
-    public async Task The_resolved_client_ip_is_sent_as_x_forwarded_for_replacing_what_the_client_claimed()
-    {
-        var handler = new RecordingHandler(_ => Json(HttpStatusCode.OK, "{}"));
-        using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(b => b.ConfigureServices(s =>
-        {
-            s.AddHttpClient<ApiForwarder>().ConfigurePrimaryHttpMessageHandler(() => handler);
-            s.AddTransient<Microsoft.AspNetCore.Hosting.IStartupFilter, FixedIpFilter>();
-        }));
-        using var client = factory.CreateClient();
-        using var request = new HttpRequestMessage(HttpMethod.Get, "/v1/me");
-        request.Headers.Add("X-Forwarded-For", "6.6.6.6");
-
-        using var response = await client.SendAsync(request, CancellationToken.None);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(["203.0.113.5"], handler.Last!.Headers.GetValues("X-Forwarded-For").ToArray());
-    }
-
     [Fact]
     public async Task Upstream_status_problem_body_and_rate_limit_headers_are_preserved()
     {

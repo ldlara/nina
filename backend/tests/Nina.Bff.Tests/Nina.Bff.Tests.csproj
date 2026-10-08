@@ -11,6 +11,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nina.Bff\Nina.Bff.csproj" />
+    <ProjectReference Include="..\..\src\Nina.SharedKernel\Nina.SharedKernel.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />
