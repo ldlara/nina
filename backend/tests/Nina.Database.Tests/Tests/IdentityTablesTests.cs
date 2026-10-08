@@ -138,13 +138,16 @@ public sealed class IdentityTablesTests(PgCluster cluster) : DbTestBase(cluster)
     [Fact]
     public async Task The_outbox_payload_rejects_pii_even_when_nested_or_renamed()
     {
+        // chaves fora do catalogo do tipo (inclusive PII renomeada/aninhada) sao recusadas pelo gatilho do catalogo (NR-11)...
         foreach (var payload in new[] { "{\"email\": \"a@b.org\"}", "{\"e_mail\": \"x\"}", "{\"user\": {\"E-Mail\": \"x\"}}", "{\"info\": \"escreva a bob@example.org\"}", "{\"list\": [{\"password\": 1}]}" })
         {
-            Assert.Equal("23514", await FailsAsync(Role.App, W.Dave, "INSERT INTO nina.outbox_message (aggregate_type, event_type, payload) VALUES ('USER', 'Evt', @p::jsonb)", P("p", payload)));
+            Assert.Equal("NN080", await FailsAsync(Role.App, W.Dave, $"INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type, payload) VALUES ('USER', '{W.Dave}', 'SecurityNoticeRequested', @p::jsonb)", P("p", payload)));
         }
 
-        Assert.Equal("23514", await FailsAsync(Role.App, W.Dave, "INSERT INTO nina.outbox_message (aggregate_type, event_type, payload) VALUES ('USER', 'Evt', @p::jsonb)", P("p", "{\"a\": \"" + new string('x', 5000) + "\"}")));
-        Assert.Equal("23514", await FailsAsync(Role.App, W.Dave, "INSERT INTO nina.outbox_message (aggregate_type, event_type) VALUES ('lowercase', 'Evt')"));
+        // ...e a CHECK de PII continua como defesa em profundidade para as chaves permitidas (valor com formato de e-mail, tamanho, agregado)
+        Assert.Equal("23514", await FailsAsync(Role.Owner, null, "INSERT INTO nina.outbox_message (aggregate_type, event_type, payload) VALUES ('USER', 'SharedBabyDeletedNotice', '{\"baby_id\": \"bob@example.org\"}')"));
+        Assert.Equal("23514", await FailsAsync(Role.Owner, null, "INSERT INTO nina.outbox_message (aggregate_type, event_type, payload) VALUES ('USER', 'SharedBabyDeletedNotice', @p::jsonb)", P("p", "{\"baby_id\": \"" + new string('x', 5000) + "\"}")));
+        Assert.Equal("NN080", await FailsAsync(Role.Owner, null, "INSERT INTO nina.outbox_message (aggregate_type, event_type) VALUES ('lowercase', 'SharedBabyDeletedNotice')"));
     }
 
     // ----------------------------------------------------- fluxos pre-autenticacao (Identity)
@@ -275,11 +278,8 @@ public sealed class IdentityTablesTests(PgCluster cluster) : DbTestBase(cluster)
     public async Task Email_verification_codes_have_an_attempt_counter_and_are_invalidated_when_exhausted()
     {
         var code = Hash("123456");
-        await using (var alice = await AsApp(W.Alice))
-        {
-            await alice.ExecAsync("SELECT nina.email_code_issue(@h, now(), now() + interval '10 minutes')", Bytes("h", code));
-            await alice.CommitAsync();
-        }
+        await OwnerAsync($"UPDATE nina.app_user SET email_verified_at = NULL WHERE id = '{W.Alice}'");      // codigo so existe para conta nao verificada
+        Assert.NotNull(await IssueEmailCodeAsync(W.Alice, code));
 
         async Task<Guid?> Verify(byte[] h)
         {
@@ -296,11 +296,7 @@ public sealed class IdentityTablesTests(PgCluster cluster) : DbTestBase(cluster)
 
         Assert.Null(await Verify(code));                                       // esgotou: nem o certo vale mais
         Assert.Equal(5, await OwnerScalarAsync<short>($"SELECT attempts FROM nina.email_verification_code WHERE user_id = '{W.Alice}'"));
-        await using (var alice = await AsApp(W.Alice))
-        {
-            await alice.ExecAsync("SELECT nina.email_code_issue(@h, now(), now() + interval '10 minutes')", Bytes("h", code));
-            await alice.CommitAsync();
-        }
+        Assert.NotNull(await IssueEmailCodeAsync(W.Alice, code));
 
         Assert.Equal(W.Alice, await Verify(code));
         Assert.Null(await Verify(code));                                       // uso unico
@@ -312,10 +308,15 @@ public sealed class IdentityTablesTests(PgCluster cluster) : DbTestBase(cluster)
     {
         var code = Hash("654321");
         var reauth = await ReauthAsync(W.Alice, "ACCOUNT_EMAIL_CHANGE");
-        Assert.Equal("NN014", await FailsAsync(Role.App, W.Alice, "SELECT nina.email_change_create('novo@example.org', @c, now(), now() + interval '10 minutes', @r)", Bytes("c", code), Bytes("r", Hash("sem-reauth"))));
+        await using (var noProof = await AsApp(W.Alice))
+        {
+            var ex = await Assert.ThrowsAsync<PostgresException>(() => EmailChangeCreateAsync(noProof, W.Alice, "novo@example.org", code, Hash("sem-reauth")));
+            Assert.Equal("NN014", ex.SqlState);
+        }
+
         await using (var alice = await AsApp(W.Alice))
         {
-            await alice.ExecAsync("SELECT nina.email_change_create('Novo@Example.org', @c, now(), now() + interval '10 minutes', @r)", Bytes("c", code), Bytes("r", reauth));
+            await EmailChangeCreateAsync(alice, W.Alice, "Novo@Example.org", code, reauth);
             await alice.CommitAsync();
         }
 
@@ -344,7 +345,7 @@ public sealed class IdentityTablesTests(PgCluster cluster) : DbTestBase(cluster)
         var reauth = await ReauthAsync(W.Alice, "ACCOUNT_EMAIL_CHANGE");
         await using (var alice = await AsApp(W.Alice))
         {
-            await alice.ExecAsync("SELECT nina.email_change_create('bob@example.org', @c, now(), now() + interval '10 minutes', @r)", Bytes("c", code), Bytes("r", reauth));
+            await EmailChangeCreateAsync(alice, W.Alice, "bob@example.org", code, reauth);
             Assert.Equal("EMAIL_IN_USE", await alice.ScalarAsync<string>("SELECT nina.email_change_confirm(@c, now())", Bytes("c", code)));
         }
 
@@ -356,29 +357,30 @@ public sealed class IdentityTablesTests(PgCluster cluster) : DbTestBase(cluster)
     [Fact]
     public async Task The_reauth_jti_is_single_use_across_instances_and_counts_replays()
     {
-        var hash = Hash("jti-1");
+        var session = await SessionAsync(W.Alice);
+        var hash = await IssueReauthAsync(W.Alice, session, ["ACCOUNT_DELETE"]);
         await using (var alice = await AsApp(W.Alice))
         {
-            Assert.True(await alice.ScalarAsync<bool>("SELECT nina.consume_reauth_jti(@h, 'ACCOUNT_DELETE', NULL, now() + interval '5 minutes')", Bytes("h", hash)));
+            Assert.True(await alice.ScalarAsync<bool>("SELECT nina.consume_reauth_jti(@h, 'ACCOUNT_DELETE', @s)", Bytes("h", hash), P("s", session)));
             await alice.CommitAsync();
         }
 
         await using (var alice = await AsApp(W.Alice))
         {
-            Assert.False(await alice.ScalarAsync<bool>("SELECT nina.consume_reauth_jti(@h, 'ACCOUNT_DELETE', NULL, now() + interval '5 minutes')", Bytes("h", hash)));
+            Assert.False(await alice.ScalarAsync<bool>("SELECT nina.consume_reauth_jti(@h, 'ACCOUNT_DELETE', @s)", Bytes("h", hash), P("s", session)));
             await alice.CommitAsync();
         }
 
         await using (var bob = await AsApp(W.Bob))
         {
-            Assert.False(await bob.ScalarAsync<bool>("SELECT nina.consume_reauth_jti(@h, 'ACCOUNT_DELETE', NULL, now() + interval '5 minutes')", Bytes("h", hash)));   // nao "queima" nem lê o do outro
+            Assert.False(await bob.ScalarAsync<bool>("SELECT nina.consume_reauth_jti(@h, 'ACCOUNT_DELETE', @s)", Bytes("h", hash), P("s", session)));   // nao "queima" nem le o do outro
             await bob.CommitAsync();
         }
 
         Assert.Equal(2, await OwnerScalarAsync<short>("SELECT attempts FROM nina.reauth_jti"));
         Assert.Equal(W.Alice, await OwnerScalarAsync<Guid>("SELECT user_id FROM nina.reauth_jti"));
         Assert.Equal("42501", await FailsAsync(Role.App, W.Alice, "SELECT * FROM nina.reauth_jti"));
-        Assert.Equal("23514", await FailsAsync(Role.Owner, null, $"INSERT INTO nina.reauth_jti (jti_hash, user_id, scope, expires_at) VALUES (decode(repeat('01', 32), 'hex'), '{W.Alice}', 'QUALQUER', now())"));
+        Assert.Equal("23514", await FailsAsync(Role.Owner, null, $"INSERT INTO nina.reauth_jti (jti_hash, user_id, session_id, scopes, issued_at, expires_at) VALUES (decode(repeat('01', 32), 'hex'), '{W.Alice}', '{session}', ARRAY['QUALQUER'], now(), now() + interval '1 minute')"));
     }
 
     [Fact]
@@ -415,14 +417,11 @@ public sealed class IdentityTablesTests(PgCluster cluster) : DbTestBase(cluster)
     }
 
     [Fact]
-    public async Task An_unconfirmed_deletion_request_can_be_confirmed_later_with_a_proven_reauth()
+    public async Task A_legacy_unconfirmed_deletion_request_can_be_confirmed_later_with_a_proven_reauth()
     {
-        Guid request;
-        await using (var alice = await AsApp(W.Alice))
-        {
-            request = await alice.ScalarAsync<Guid>("SELECT nina.request_account_deletion(NULL)");
-            await alice.CommitAsync();
-        }
+        // pelo app o pedido nasce sempre confirmado (NR-03/NR-14): sem reautenticacao nao ha pedido
+        Assert.Equal("NN014", await FailsAsync(Role.App, W.Alice, "SELECT nina.request_account_deletion(NULL)"));
+        var request = await OwnerScalarAsync<Guid>($"INSERT INTO nina.account_deletion_request (user_id, grace_days, scheduled_for) VALUES ('{W.Alice}', 1, now()) RETURNING id");
 
         Assert.Null(await OwnerScalarAsync<DateTime?>($"SELECT confirmed_at FROM nina.account_deletion_request WHERE id = '{request}'"));
         var jti = await ReauthAsync(W.Alice, "ACCOUNT_DELETE");
