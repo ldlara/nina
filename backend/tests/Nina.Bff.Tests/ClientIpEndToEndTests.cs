@@ -50,7 +50,10 @@ public sealed class ClientIpEndToEndTests : IAsyncDisposable
         var settings = new Dictionary<string, string?>
         {
             ["Internal:SharedSecret"] = Secret,
-            ["ForwardedHeaders:KnownProxies:0"] = "127.0.0.1", // o "roteador": o socket real do teste
+            // O "roteador" é o socket real do teste. O Kestrel de teste escuta em "localhost", que no runner de CI
+            // resolve para IPv6 (::1) e localmente para IPv4: os dois loopbacks representam o roteador.
+            ["ForwardedHeaders:KnownProxies:0"] = "127.0.0.1",
+            ["ForwardedHeaders:KnownProxies:1"] = "::1",
         };
         configure(settings);
         var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(b =>
@@ -63,6 +66,9 @@ public sealed class ClientIpEndToEndTests : IAsyncDisposable
         factory.UseKestrel(0);
         return factory;
     }
+
+    private static void AssertLoopback(string seen) =>
+        Assert.True(seen is "127.0.0.1" or "::1", $"esperado o loopback do teste, veio '{seen}'");
 
     private static async Task<HttpResponseMessage> LoginAsync(HttpClient client, string? forwardedFor)
     {
@@ -119,7 +125,11 @@ public sealed class ClientIpEndToEndTests : IAsyncDisposable
     [Fact]
     public async Task Forwarded_for_from_an_untrusted_peer_is_dropped_and_cannot_evade_the_limit()
     {
-        using var bff = CreateBff(s => s["ForwardedHeaders:KnownProxies:0"] = "192.0.2.1"); // o peer real (127.0.0.1) NÃO é confiável
+        using var bff = CreateBff(s =>
+        {
+            s["ForwardedHeaders:KnownProxies:0"] = "192.0.2.1"; // o peer real (loopback) NÃO é confiável
+            s.Remove("ForwardedHeaders:KnownProxies:1");
+        });
         using var client = bff.CreateClient();
 
         var statuses = new List<HttpStatusCode>();
@@ -127,7 +137,7 @@ public sealed class ClientIpEndToEndTests : IAsyncDisposable
         {
             using var r = await LoginAsync(client, $"198.51.100.{i + 1}"); // cada tentativa jura ser outro cliente
             statuses.Add(r.StatusCode);
-            Assert.Equal("127.0.0.1", await SeenIpAsync(r));
+            AssertLoopback(await SeenIpAsync(r));
         }
 
         Assert.Equal(HttpStatusCode.TooManyRequests, statuses[^1]);
@@ -139,7 +149,9 @@ public sealed class ClientIpEndToEndTests : IAsyncDisposable
         using var bff = CreateBff(s =>
         {
             s.Remove("ForwardedHeaders:KnownProxies:0");
+            s.Remove("ForwardedHeaders:KnownProxies:1");
             s["ForwardedHeaders:KnownNetworks:0"] = "127.0.0.0/8";
+            s["ForwardedHeaders:KnownNetworks:1"] = "::1/128";
         });
         using var client = bff.CreateClient();
 
@@ -159,7 +171,7 @@ public sealed class ClientIpEndToEndTests : IAsyncDisposable
 
         using var response = await client.SendAsync(request, CancellationToken.None);
 
-        Assert.Equal("127.0.0.1", await SeenIpAsync(response)); // cabeçalhos ignorados
+        AssertLoopback(await SeenIpAsync(response)); // cabeçalhos ignorados
     }
 
     [Fact]
