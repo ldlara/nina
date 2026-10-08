@@ -11,6 +11,8 @@
 --   nina_config_admin edição de flags/planos/parâmetros (auditada)
 -- A aplicação NUNCA deve conectar como dono das tabelas nem como superuser
 -- (ambos ignoram RLS).
+-- Enums (ADR-0010): TODOS os CHECKs de valores fixos em MAIÚSCULAS (OWNER, NAP, ACTIVE...). Chaves de
+-- catálogo/identificadores (plan.code, flag_key, param_key, purpose_key, audit_event.action) seguem em minúsculas.
 -- =============================================================================
 
 BEGIN;
@@ -393,6 +395,14 @@ BEGIN
     END IF;
     NEW.created_at := now();
   ELSE
+    IF current_setting('nina.authorship_scrub', true) = 'on' THEN
+      -- Eliminacao de autoria (ADR-0010, scrub_user_personal_data): so os ponteiros created_by/last_modified_by do
+      -- usuario-alvo sao anulados; nada mais muda, sem nova versao e sem change_log (autoria nao faz parte do contrato).
+      NEW := OLD;
+      IF OLD.created_by = nullif(current_setting('nina.scrub_user', true), '')::uuid THEN NEW.created_by := NULL; END IF;
+      IF OLD.last_modified_by = nullif(current_setting('nina.scrub_user', true), '')::uuid THEN NEW.last_modified_by := NULL; END IF;
+      RETURN NEW;
+    END IF;
     IF NEW.id <> OLD.id OR NEW.baby_id <> OLD.baby_id THEN
       RAISE EXCEPTION 'id/baby_id sao imutaveis' USING ERRCODE = 'NN001';
     END IF;
@@ -413,6 +423,12 @@ CREATE FUNCTION nina.sync_stamp_baby() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
 BEGIN
   IF TG_OP = 'UPDATE' THEN
+    IF current_setting('nina.authorship_scrub', true) = 'on' THEN     -- ver sync_stamp_child
+      NEW := OLD;
+      IF OLD.created_by = nullif(current_setting('nina.scrub_user', true), '')::uuid THEN NEW.created_by := NULL; END IF;
+      IF OLD.last_modified_by = nullif(current_setting('nina.scrub_user', true), '')::uuid THEN NEW.last_modified_by := NULL; END IF;
+      RETURN NEW;
+    END IF;
     IF NEW.id <> OLD.id THEN RAISE EXCEPTION 'id imutavel' USING ERRCODE = 'NN001'; END IF;
     IF OLD.deleted_at IS NOT NULL THEN
       RAISE EXCEPTION 'bebe excluido nao pode ser alterado (INV-20)' USING ERRCODE = 'NN002';
@@ -433,6 +449,7 @@ DECLARE
   v_baby uuid;
   v_days integer;
 BEGIN
+  IF TG_OP = 'UPDATE' AND NEW.version = OLD.version THEN RETURN NULL; END IF;   -- sem nova versao (scrub de autoria): nada a sincronizar
   IF TG_ARGV[0] = 'BABY' THEN v_baby := NEW.id; ELSE v_baby := NEW.baby_id; END IF;
   INSERT INTO nina.change_log (baby_id, sync_sequence, entity_type, entity_id, op, actor_user_id, device_id)
   VALUES (v_baby, NEW.version, TG_ARGV[0], NEW.id,
@@ -503,6 +520,7 @@ CREATE TABLE nina.feeding_session (
     OR (feeding_type = 'SOLID' AND side IS NULL AND volume_ml IS NULL AND milk_type IS NULL)
     OR (feeding_type = 'OTHER' AND side IS NULL AND milk_type IS NULL))
 );
+COMMENT ON COLUMN nina.feeding_session.end_at IS 'ADR-0010 item 5: OBRIGATORIO quando feeding_type = BREASTFEEDING (feeding_shape_ck); opcional nos demais tipos.';
 COMMENT ON COLUMN nina.feeding_session.milk_type IS 'ADR-0009: NULL quando feeding_type <> BOTTLE (nao se aplica). Em BOTTLE, NULL = indisponivel; UNSPECIFIED = usuario nao especificou.';
 CREATE INDEX feeding_timeline_ix ON nina.feeding_session (baby_id, start_at DESC) WHERE deleted_at IS NULL;
 
@@ -1012,6 +1030,16 @@ BEGIN
       IF NEW.value_type <> 'INT' OR jsonb_typeof(NEW.value) <> 'number' OR (NEW.value #>> '{}')::numeric NOT BETWEEN 0 AND 1440 THEN
         RAISE EXCEPTION 'sleep.night_awakenings.min_session_minutes deve ser int entre 0 e 1440' USING ERRCODE = 'check_violation';
       END IF;
+    WHEN 'privacy.deletion_grace_days' THEN
+      IF NEW.value_type <> 'INT' OR jsonb_typeof(NEW.value) <> 'number' OR (NEW.value #>> '{}') !~ '^[0-9]+$'
+         OR (NEW.value #>> '{}')::numeric NOT BETWEEN 1 AND 30 THEN
+        RAISE EXCEPTION 'privacy.deletion_grace_days deve ser int entre 1 e 30' USING ERRCODE = 'check_violation';
+      END IF;
+    WHEN 'privacy.request_response_days' THEN
+      IF NEW.value_type <> 'INT' OR jsonb_typeof(NEW.value) <> 'number' OR (NEW.value #>> '{}') !~ '^[0-9]+$'
+         OR (NEW.value #>> '{}')::numeric NOT BETWEEN 1 AND 60 THEN
+        RAISE EXCEPTION 'privacy.request_response_days deve ser int entre 1 e 60' USING ERRCODE = 'check_violation';
+      END IF;
     ELSE NULL;
   END CASE;
   RETURN NEW;
@@ -1042,12 +1070,16 @@ CREATE TABLE nina.data_export_request (
 );
 CREATE INDEX data_export_user_ix ON nina.data_export_request (user_id, requested_at DESC);
 
+-- Exclusao de conta (ADR-0010 item 3): SO o Owner ativo de um bebe pode solicitar. Nao-Owner usa privacy_request.
+-- Janela de arrependimento (ADR-0010 item 6): scheduled_for = requested_at + privacy.deletion_grace_days (7),
+-- calculado e congelado pelo trigger account_deletion_guard (o cliente nao decide); cancelavel ate scheduled_for.
 CREATE TABLE nina.account_deletion_request (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id       uuid NOT NULL REFERENCES nina.app_user(id),
   requested_at  timestamptz NOT NULL DEFAULT now(),
-  status        text NOT NULL DEFAULT 'REQUESTED' CHECK (status IN ('REQUESTED', 'SCHEDULED', 'BLOCKED', 'COMPLETED', 'CANCELLED')),
-  scheduled_for timestamptz,                             -- janela de arrependimento (D-07)
+  status        text NOT NULL DEFAULT 'SCHEDULED' CHECK (status IN ('SCHEDULED', 'BLOCKED', 'COMPLETED', 'CANCELLED')),
+  grace_days    integer NOT NULL CHECK (grace_days >= 1),          -- valor do parametro no momento do pedido
+  scheduled_for timestamptz NOT NULL,                              -- = requested_at + grace_days; erase_user nunca antes
   block_reason  text CHECK (block_reason IN ('OWNER_HAS_OTHER_CAREGIVERS')),
   -- ADR-0009: confirmacao explicita (reautenticacao) registrada pela API ao criar o pedido; exigida pela
   -- politica 'CASCADE' quando a exclusao apaga dados de bebe com outros cuidadores ativos
@@ -1056,9 +1088,77 @@ CREATE TABLE nina.account_deletion_request (
   policy_applied      text CHECK (policy_applied IN ('CASCADE', 'BLOCK', 'TRANSFER_OWNERSHIP')),   -- preenchido por erase_user
   completed_at  timestamptz,
   cancelled_at  timestamptz,
-  CONSTRAINT deletion_confirmation_ck CHECK ((confirmed_at IS NULL) = (confirmation_method IS NULL))
+  CONSTRAINT deletion_confirmation_ck CHECK ((confirmed_at IS NULL) = (confirmation_method IS NULL)),
+  CONSTRAINT deletion_schedule_ck CHECK (scheduled_for >= requested_at)
 );
-CREATE UNIQUE INDEX account_deletion_open_uq ON nina.account_deletion_request (user_id) WHERE status IN ('REQUESTED', 'SCHEDULED', 'BLOCKED');
+CREATE UNIQUE INDEX account_deletion_open_uq ON nina.account_deletion_request (user_id) WHERE status IN ('SCHEDULED', 'BLOCKED');
+
+CREATE FUNCTION nina.account_deletion_guard() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.requested_at := now();
+    NEW.grace_days := nina.param_int('privacy.deletion_grace_days', 7);
+    NEW.scheduled_for := NEW.requested_at + make_interval(days => NEW.grace_days);
+    NEW.status := 'SCHEDULED';
+    NEW.block_reason := NULL; NEW.policy_applied := NULL; NEW.completed_at := NULL; NEW.cancelled_at := NULL;
+    INSERT INTO nina.audit_event (actor_user_id, action, entity_type, entity_id, metadata_safe, is_critical)
+    VALUES (NEW.user_id, 'account.deletion_requested', 'USER', NEW.user_id,
+            jsonb_build_object('request_id', NEW.id, 'grace_days', NEW.grace_days, 'scheduled_for', NEW.scheduled_for,
+                               'confirmed', NEW.confirmed_at IS NOT NULL), true);
+    RETURN NEW;
+  END IF;
+  -- UPDATE
+  IF NEW.id <> OLD.id OR NEW.user_id <> OLD.user_id OR NEW.requested_at <> OLD.requested_at
+     OR NEW.grace_days <> OLD.grace_days OR NEW.scheduled_for <> OLD.scheduled_for
+     OR NEW.confirmed_at IS DISTINCT FROM OLD.confirmed_at OR NEW.confirmation_method IS DISTINCT FROM OLD.confirmation_method THEN
+    RAISE EXCEPTION 'pedido de exclusao: id/usuario/janela/confirmacao sao imutaveis' USING ERRCODE = 'NN001';
+  END IF;
+  IF NEW.status IS DISTINCT FROM OLD.status THEN
+    IF OLD.status IN ('COMPLETED', 'CANCELLED') THEN
+      RAISE EXCEPTION 'pedido de exclusao ja encerrado (%)', OLD.status USING ERRCODE = 'NN011';
+    END IF;
+    IF NEW.status = 'CANCELLED' THEN
+      IF now() >= OLD.scheduled_for THEN
+        RAISE EXCEPTION 'CANCEL_WINDOW_CLOSED: a janela de arrependimento terminou em %', OLD.scheduled_for USING ERRCODE = 'NN011';
+      END IF;
+      NEW.cancelled_at := now();
+      INSERT INTO nina.audit_event (actor_user_id, action, entity_type, entity_id, metadata_safe, is_critical)
+      VALUES (OLD.user_id, 'account.deletion_cancelled', 'USER', OLD.user_id, jsonb_build_object('request_id', OLD.id), true);
+    ELSIF NEW.status = 'COMPLETED' THEN
+      IF now() < OLD.scheduled_for THEN
+        RAISE EXCEPTION 'DELETION_GRACE_NOT_ELAPSED: execucao so apos %', OLD.scheduled_for USING ERRCODE = 'NN008';
+      END IF;
+    ELSIF NEW.status = 'SCHEDULED' THEN
+      RAISE EXCEPTION 'transicao % -> SCHEDULED nao permitida', OLD.status USING ERRCODE = 'NN011';
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER account_deletion_request_guard BEFORE INSERT OR UPDATE ON nina.account_deletion_request
+  FOR EACH ROW EXECUTE FUNCTION nina.account_deletion_guard();
+
+-- Requisicao de privacidade (LGPD art. 18) de QUEM NAO PODE excluir a conta (ADR-0010 item 3): Caregiver/ReadOnly ou
+-- sem vinculo. Eliminacao/anonimizacao dos PROPRIOS dados pessoais SEM tocar nos dados do bebe (pertencem ao Owner).
+-- Abertura/cancelamento so por funcoes (open_privacy_request/cancel_privacy_request: auditam); atendimento pelo worker.
+CREATE TABLE nina.privacy_request (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id             uuid NOT NULL REFERENCES nina.app_user(id),
+  request_type        text NOT NULL CHECK (request_type IN ('ACCESS', 'CORRECTION', 'EXPORT', 'ERASURE')),
+  status              text NOT NULL DEFAULT 'REQUESTED' CHECK (status IN ('REQUESTED', 'COMPLETED', 'REJECTED', 'CANCELLED')),
+  requested_at        timestamptz NOT NULL DEFAULT now(),
+  due_at              timestamptz NOT NULL,                       -- requested_at + privacy.request_response_days (15)
+  identity_verified_at timestamptz,                               -- verificacao de identidade (privacy-spec 5)
+  verification_method text CHECK (verification_method IN ('REAUTHENTICATION')),
+  completed_at        timestamptz,
+  cancelled_at        timestamptz,
+  closed_reason       text CHECK (length(closed_reason) <= 64),   -- codigo curto, sem PII
+  CONSTRAINT privacy_verification_ck CHECK ((identity_verified_at IS NULL) = (verification_method IS NULL)),
+  CONSTRAINT privacy_erasure_verified_ck CHECK (request_type <> 'ERASURE' OR identity_verified_at IS NOT NULL)
+);
+CREATE UNIQUE INDEX privacy_request_open_uq ON nina.privacy_request (user_id, request_type) WHERE status = 'REQUESTED';
+CREATE INDEX privacy_request_due_ix ON nina.privacy_request (due_at) WHERE status = 'REQUESTED';
+COMMENT ON TABLE nina.privacy_request IS 'ADR-0010 item 3: caminho de DSAR para nao-Owner. ERASURE anonimiza dados pessoais proprios (fulfill_privacy_erasure) e nunca apaga dado de bebe.';
 
 -- -----------------------------------------------------------------------------
 -- 9. Exclusão (ADR-0008) e purga/retenção
@@ -1426,10 +1526,12 @@ INSERT INTO nina.app_parameter (param_key, value, value_type, description) VALUE
   ('sync.changelog_retention_days',     '90'::jsonb,    'INT',    'Retencao do change log; cursor mais antigo => cursor expirado (ADR-0003)'),
   ('prediction.retention_days',         '90'::jsonb,    'INT',    'Retencao de previsoes derivadas (privacy-spec 4)'),
   ('push.token_inactivity_days',        '60'::jsonb,    'INT',    'Inatividade para apagar token de push (privacy-spec 4)'),
-  ('privacy.owner_deletion_policy',     '"CASCADE"'::jsonb, 'STRING', 'ADR-0009: politica de exclusao de conta. cascade (padrao) = apaga o bebe tambem para outros cuidadores, com confirmacao registrada; block = recusa; transfer_ownership = promove cuidador mais antigo'),
-  ('sleep.overlap_policy',              '"ACCEPT_AND_WARN"'::jsonb, 'STRING', 'ADR-0009: sono sobreposto. accept_and_warn (padrao) = aceita e sinaliza; reject = recusa (NN006)'),
-  ('age.corrected_window_months',       '24'::jsonb,    'INT',    'ADR-0009: janela (idade cronologica, em meses) em que a idade corrigida se aplica. Valor inicial proposto; produto confirma'),
-  ('sleep.night_awakenings.min_session_minutes', '240'::jsonb, 'INT', 'ADR-0009: duracao minima (min) de sessao noturna encerrada para considerar o acompanhamento suficiente (0 despertares em vez de nulo). Valor inicial proposto');
+  ('privacy.owner_deletion_policy',     '"CASCADE"'::jsonb, 'STRING', 'ADR-0009: politica de exclusao de conta. CASCADE (padrao) = apaga o bebe tambem para outros cuidadores, com confirmacao registrada; BLOCK = recusa; TRANSFER_OWNERSHIP = promove cuidador mais antigo'),
+  ('sleep.overlap_policy',              '"ACCEPT_AND_WARN"'::jsonb, 'STRING', 'ADR-0009: sono sobreposto. ACCEPT_AND_WARN (padrao) = aceita e sinaliza; REJECT = recusa (NN006)'),
+  ('age.corrected_window_months',       '24'::jsonb,    'INT',    'ADR-0009: janela (idade cronologica, em meses) em que a idade corrigida se aplica. Padrao aceito (ADR-0010 item 4); editavel'),
+  ('sleep.night_awakenings.min_session_minutes', '240'::jsonb, 'INT', 'ADR-0009: duracao minima (min) de sessao noturna encerrada para considerar o acompanhamento suficiente (0 despertares em vez de nulo). Padrao aceito (ADR-0010 item 4); editavel'),
+  ('privacy.deletion_grace_days',       '7'::jsonb,     'INT',    'ADR-0010 item 6: janela de arrependimento da exclusao de conta, em dias (1..30). scheduled_for = requested_at + este valor (congelado no pedido); erase_user nao executa antes'),
+  ('privacy.request_response_days',     '15'::jsonb,    'INT',    'ADR-0010 item 3 / privacy-spec 5: prazo de atendimento de requisicao de privacidade (DSAR), em dias (1..60); due_at. Validacao juridica: DJ-07');
 
 INSERT INTO nina.consent_purpose (purpose_key, description, is_required, scope, current_version, in_mvp) VALUES
   ('terms_of_use',        'Aceite dos Termos de Uso',                                   true,  'USER', '1.0.0', true),
