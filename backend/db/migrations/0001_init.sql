@@ -1119,7 +1119,7 @@ BEGIN
       RAISE EXCEPTION 'pedido de exclusao ja encerrado (%)', OLD.status USING ERRCODE = 'NN011';
     END IF;
     IF NEW.status = 'CANCELLED' THEN
-      IF now() >= OLD.scheduled_for THEN
+      IF OLD.status = 'SCHEDULED' AND now() >= OLD.scheduled_for THEN     -- BLOCKED nunca executa: pode ser cancelado a qualquer tempo
         RAISE EXCEPTION 'CANCEL_WINDOW_CLOSED: a janela de arrependimento terminou em %', OLD.scheduled_for USING ERRCODE = 'NN011';
       END IF;
       NEW.cancelled_at := now();
@@ -1197,7 +1197,63 @@ BEGIN
   VALUES ('BABY', p_baby, 'BabyDeleted');
 END $$;
 
--- Exclusao de conta (ADR-0008 + ADR-0009). Politica em app_parameter 'privacy.owner_deletion_policy':
+-- E o Owner ativo de ao menos um bebe vivo? (so ele exclui a conta - ADR-0010 item 3)
+CREATE FUNCTION nina.is_active_baby_owner(p_user uuid) RETURNS boolean
+LANGUAGE sql STABLE AS
+$$ SELECT EXISTS (SELECT 1 FROM nina.caregiver_membership m
+                    JOIN nina.baby b ON b.id = m.baby_id AND b.deleted_at IS NULL
+                   WHERE m.user_id = p_user AND m.role = 'OWNER' AND m.status = 'ACTIVE') $$;
+
+-- Remove/anonimiza os dados pessoais PROPRIOS de um usuario, sem tocar em dados de bebe (ADR-0010 item 3).
+-- Comum a erase_user (depois de tratar os bebes do Owner) e a fulfill_privacy_erasure (nao-Owner).
+-- Devolve so contagens (usadas na auditoria, sem PII).
+--  * consentimentos: append-only; os ainda concedidos ganham linha REVOKED (source SYSTEM). A prova minima
+--    (ids, finalidade, versao, datas) permanece ligada a app_user ja anonimizado (privacy-spec 4, F12).
+--  * autoria: created_by/last_modified_by que apontam para o usuario viram NULL nos dados de bebe (inclusive
+--    tombstones), sem nova versao e sem change_log (nina.authorship_scrub, ver triggers de sync).
+--  * vinculos de cuidador, preferencias/jobs de notificacao, tokens de push, recuperacao, identidades,
+--    credencial, sessoes/refresh: apagados. Entitlement: membro removido. Exports: file_ref zerado.
+--  * app_user: anonimizado (status DELETED, sem e-mail/locale/fuso).
+CREATE FUNCTION nina.scrub_user_personal_data(p_user uuid, p_actor uuid DEFAULT NULL) RETURNS jsonb
+LANGUAGE plpgsql AS $$
+DECLARE
+  n_consent integer; n_auth integer := 0; n_tmp integer; n_member integer; n_push integer; n_sess integer; t text;
+BEGIN
+  INSERT INTO nina.consent_record (user_id, subject_baby_id, purpose_key, policy_version, text_hash, locale, status, source, platform)
+  SELECT c.user_id, c.subject_baby_id, c.purpose_key, c.policy_version, c.text_hash, c.locale, 'REVOKED', 'SYSTEM', 'SERVER'
+    FROM nina.consent_current c WHERE c.user_id = p_user AND c.status = 'GRANTED';
+  GET DIAGNOSTICS n_consent = ROW_COUNT;
+
+  PERFORM set_config('nina.authorship_scrub', 'on', true);
+  PERFORM set_config('nina.scrub_user', p_user::text, true);
+  FOREACH t IN ARRAY ARRAY['baby', 'sleep_session', 'feeding_session', 'pumping_session', 'diaper_event', 'wake_event', 'sleep_schedule_preference'] LOOP
+    EXECUTE format('UPDATE nina.%I SET created_by = created_by WHERE created_by = $1 OR last_modified_by = $1', t) USING p_user;
+    GET DIAGNOSTICS n_tmp = ROW_COUNT; n_auth := n_auth + n_tmp;
+  END LOOP;
+  PERFORM set_config('nina.authorship_scrub', 'off', true);
+  PERFORM set_config('nina.scrub_user', '', true);
+
+  UPDATE nina.caregiver_membership SET invited_by = NULL WHERE invited_by = p_user;
+  DELETE FROM nina.caregiver_membership WHERE user_id = p_user;
+  GET DIAGNOSTICS n_member = ROW_COUNT;
+  DELETE FROM nina.notification_job WHERE user_id = p_user;
+  DELETE FROM nina.notification_preference WHERE user_id = p_user;
+  DELETE FROM nina.device_push_token WHERE user_id = p_user;
+  GET DIAGNOSTICS n_push = ROW_COUNT;
+  DELETE FROM nina.recovery_request WHERE user_id = p_user;
+  DELETE FROM nina.user_identity WHERE user_id = p_user;
+  DELETE FROM nina.user_credential WHERE user_id = p_user;
+  DELETE FROM nina.auth_session WHERE user_id = p_user;              -- cascata: refresh_token
+  GET DIAGNOSTICS n_sess = ROW_COUNT;
+  UPDATE nina.family_entitlement_member SET removed_at = now() WHERE user_id = p_user AND removed_at IS NULL;
+  UPDATE nina.data_export_request SET file_ref = NULL, status = 'EXPIRED' WHERE user_id = p_user AND file_ref IS NOT NULL;
+  UPDATE nina.app_user SET status = 'DELETED', email = NULL, email_verified_at = NULL, locale = NULL,
+         timezone = NULL, deleted_at = now() WHERE id = p_user;
+  RETURN jsonb_build_object('consents_revoked', n_consent, 'authorship_rows', n_auth, 'memberships_removed', n_member,
+                            'push_tokens', n_push, 'sessions', n_sess);
+END $$;
+
+-- Exclusao de conta (ADR-0008 + ADR-0009 + ADR-0010). Politica em app_parameter 'privacy.owner_deletion_policy':
 --   cascade (PADRAO): apaga o bebe do qual o usuario e Owner MESMO com outros cuidadores ativos.
 --       Exige confirmacao registrada (account_deletion_request.confirmed_at, reautenticacao) quando ha
 --       outros cuidadores (NN007) e grava auditoria por bebe compartilhado. Validacao juridica: DJ-09.
@@ -1205,10 +1261,13 @@ END $$;
 --   transfer_ownership: promove o cuidador ativo mais antigo (caregiver antes de read_only) a Owner,
 --       move o bebe para a familia dele e segue com a exclusao; sem outro membro, o bebe e apagado.
 -- Bebes em que o usuario e o unico membro ativo sao sempre apagados.
+-- ADR-0010: o BANCO exige (i) pedido SCHEDULED do usuario, (ii) now() >= scheduled_for (NN008 antes disso),
+-- (iii) usuario ainda Owner ativo de bebe vivo (NN012; nao-Owner usa privacy_request). Sem pedido: NN009.
 CREATE FUNCTION nina.erase_user(p_user uuid, p_actor uuid DEFAULT NULL) RETURNS void
 LANGUAGE plpgsql AS $$
 DECLARE
   v_policy text := nina.param_text('privacy.owner_deletion_policy', 'CASCADE');
+  v_scrub jsonb;
   r record;
   v_req nina.account_deletion_request%ROWTYPE;
   v_new_owner uuid;
@@ -1220,7 +1279,17 @@ BEGIN
     RAISE EXCEPTION 'politica % desconhecida (cascade|block|transfer_ownership)', v_policy USING ERRCODE = 'NN005';
   END IF;
   SELECT * INTO v_req FROM nina.account_deletion_request
-   WHERE user_id = p_user AND status IN ('REQUESTED', 'SCHEDULED') ORDER BY requested_at DESC LIMIT 1;
+   WHERE user_id = p_user AND status = 'SCHEDULED' ORDER BY requested_at DESC LIMIT 1
+     FOR UPDATE;                                           -- serializa com um cancelamento concorrente
+  IF v_req.id IS NULL THEN
+    RAISE EXCEPTION 'DELETION_REQUEST_REQUIRED: nao ha pedido de exclusao agendado para o usuario' USING ERRCODE = 'NN009';
+  END IF;
+  IF now() < v_req.scheduled_for THEN
+    RAISE EXCEPTION 'DELETION_GRACE_NOT_ELAPSED: execucao so apos % (janela de arrependimento)', v_req.scheduled_for USING ERRCODE = 'NN008';
+  END IF;
+  IF NOT nina.is_active_baby_owner(p_user) THEN
+    RAISE EXCEPTION 'NOT_BABY_OWNER: somente Owner ativo de um bebe exclui a conta; use privacy_request (ADR-0010)' USING ERRCODE = 'NN012';
+  END IF;
 
   -- Pre-checagens (antes de qualquer alteracao)
   IF EXISTS (SELECT 1 FROM nina.caregiver_membership o
@@ -1271,27 +1340,107 @@ BEGIN
       PERFORM nina.erase_baby(r.baby_id, p_actor);
     END IF;
   END LOOP;
-  -- Vinculos remanescentes (cuidador em bebe de outros): remover vinculo, preservar dados dos demais
-  DELETE FROM nina.caregiver_membership WHERE user_id = p_user;
-  UPDATE nina.caregiver_membership SET invited_by = NULL WHERE invited_by = p_user;
-  DELETE FROM nina.notification_job WHERE user_id = p_user;
-  DELETE FROM nina.notification_preference WHERE user_id = p_user;
-  DELETE FROM nina.device_push_token WHERE user_id = p_user;
-  DELETE FROM nina.recovery_request WHERE user_id = p_user;
-  DELETE FROM nina.user_identity WHERE user_id = p_user;
-  DELETE FROM nina.user_credential WHERE user_id = p_user;
-  DELETE FROM nina.auth_session WHERE user_id = p_user;              -- cascata: refresh_token
-  UPDATE nina.family_entitlement_member SET removed_at = now() WHERE user_id = p_user AND removed_at IS NULL;
-  UPDATE nina.data_export_request SET file_ref = NULL, status = 'EXPIRED' WHERE user_id = p_user AND file_ref IS NOT NULL;
-  UPDATE nina.app_user SET status = 'DELETED', email = NULL, email_verified_at = NULL, locale = NULL,
-         timezone = NULL, deleted_at = now() WHERE id = p_user;
+  -- Demais dados pessoais: vinculos como cuidador em bebes de terceiros (os eventos que ele criou permanecem, pois
+  -- pertencem ao bebe; a autoria e anulada), tokens, sessoes, credenciais, consentimentos revogados, anonimizacao
+  v_scrub := nina.scrub_user_personal_data(p_user, p_actor);
   UPDATE nina.account_deletion_request SET status = 'COMPLETED', completed_at = now(), policy_applied = v_policy
-   WHERE user_id = p_user AND status IN ('REQUESTED', 'SCHEDULED');
+   WHERE id = v_req.id;
   INSERT INTO nina.audit_event (actor_user_id, actor_type, action, entity_type, entity_id, metadata_safe, is_critical)
   VALUES (p_actor, CASE WHEN p_actor IS NULL THEN 'SYSTEM' ELSE 'USER' END, 'account.erased', 'USER', p_user,
-          jsonb_build_object('policy', v_policy), true);
+          jsonb_build_object('policy', v_policy, 'request_id', v_req.id) || v_scrub, true);
   INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type)
   VALUES ('USER', p_user, 'AccountDeleted');
+END $$;
+
+-- ---- Requisicao de privacidade (ADR-0010 item 3) ----
+-- Abre o pedido do PROPRIO usuario (nina.user_id). A identidade ja foi verificada pela API (reautenticacao).
+-- ERASURE nao e aceita de Owner ativo de bebe (NN013): ele usa a exclusao de conta, que trata os bebes.
+CREATE FUNCTION nina.open_privacy_request(p_type text, p_verification text DEFAULT 'REAUTHENTICATION') RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
+DECLARE v_user uuid := nina.current_user_id(); v_id uuid; v_due timestamptz;
+BEGIN
+  IF v_user IS NULL OR NOT EXISTS (SELECT 1 FROM nina.app_user WHERE id = v_user AND status = 'ACTIVE') THEN
+    RAISE EXCEPTION 'requisicao de privacidade exige usuario ativo no contexto (nina.user_id)' USING ERRCODE = 'NN015';
+  END IF;
+  IF p_type = 'ERASURE' AND nina.is_active_baby_owner(v_user) THEN
+    RAISE EXCEPTION 'OWNER_MUST_USE_ACCOUNT_DELETION: Owner ativo exclui a conta pelo fluxo de exclusao (ADR-0010)' USING ERRCODE = 'NN013';
+  END IF;
+  IF p_type = 'ERASURE' AND p_verification IS NULL THEN
+    RAISE EXCEPTION 'IDENTITY_NOT_VERIFIED: eliminacao exige verificacao de identidade' USING ERRCODE = 'NN014';
+  END IF;
+  v_due := now() + make_interval(days => nina.param_int('privacy.request_response_days', 15));
+  INSERT INTO nina.privacy_request (user_id, request_type, due_at, identity_verified_at, verification_method)
+  VALUES (v_user, p_type, v_due, CASE WHEN p_verification IS NOT NULL THEN now() END, p_verification)
+  RETURNING id INTO v_id;
+  INSERT INTO nina.audit_event (actor_user_id, action, entity_type, entity_id, metadata_safe, is_critical)
+  VALUES (v_user, 'privacy.request_opened', 'PRIVACY_REQUEST', v_id,
+          jsonb_build_object('request_type', p_type, 'due_at', v_due), true);
+  RETURN v_id;
+END $$;
+
+CREATE FUNCTION nina.cancel_privacy_request(p_request uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
+DECLARE v_user uuid := nina.current_user_id();
+BEGIN
+  UPDATE nina.privacy_request SET status = 'CANCELLED', cancelled_at = now(), closed_reason = 'USER_CANCELLED'
+   WHERE id = p_request AND user_id = v_user AND status = 'REQUESTED';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'requisicao inexistente, de outro usuario ou ja encerrada' USING ERRCODE = 'NN015';
+  END IF;
+  INSERT INTO nina.audit_event (actor_user_id, action, entity_type, entity_id, metadata_safe, is_critical)
+  VALUES (v_user, 'privacy.request_cancelled', 'PRIVACY_REQUEST', p_request, jsonb_build_object('request_id', p_request), true);
+END $$;
+
+-- Worker: encerra ACCESS/CORRECTION/EXPORT (cumpridos pela API) como COMPLETED ou REJECTED. ERASURE so por fulfill.
+CREATE FUNCTION nina.close_privacy_request(p_request uuid, p_status text, p_reason text DEFAULT NULL, p_actor uuid DEFAULT NULL) RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE v_req nina.privacy_request%ROWTYPE;
+BEGIN
+  IF p_status NOT IN ('COMPLETED', 'REJECTED') THEN
+    RAISE EXCEPTION 'status de encerramento invalido: %', p_status USING ERRCODE = 'NN015';
+  END IF;
+  SELECT * INTO v_req FROM nina.privacy_request WHERE id = p_request AND status = 'REQUESTED' FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'requisicao inexistente ou ja encerrada' USING ERRCODE = 'NN015'; END IF;
+  IF v_req.request_type = 'ERASURE' AND p_status = 'COMPLETED' THEN
+    RAISE EXCEPTION 'ERASURE so e concluida por fulfill_privacy_erasure' USING ERRCODE = 'NN015';
+  END IF;
+  UPDATE nina.privacy_request SET status = p_status, completed_at = now(), closed_reason = left(p_reason, 64) WHERE id = p_request;
+  INSERT INTO nina.audit_event (actor_user_id, actor_type, action, entity_type, entity_id, metadata_safe, is_critical)
+  VALUES (p_actor, CASE WHEN p_actor IS NULL THEN 'SYSTEM' ELSE 'ADMIN' END, 'privacy.request_closed', 'PRIVACY_REQUEST', p_request,
+          jsonb_build_object('request_type', v_req.request_type, 'status', p_status, 'on_time', now() <= v_req.due_at), true);
+END $$;
+
+-- Worker: cumpre ERASURE de nao-Owner. Anonimiza os dados pessoais proprios (scrub_user_personal_data) e NAO apaga
+-- nada de bebe. Recusa Owner ativo (NN013) e pedido sem identidade verificada (NN014).
+CREATE FUNCTION nina.fulfill_privacy_erasure(p_request uuid, p_actor uuid DEFAULT NULL) RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE v_req nina.privacy_request%ROWTYPE; v_scrub jsonb;
+BEGIN
+  SELECT * INTO v_req FROM nina.privacy_request WHERE id = p_request FOR UPDATE;
+  IF NOT FOUND OR v_req.request_type <> 'ERASURE' THEN
+    RAISE EXCEPTION 'requisicao ERASURE inexistente' USING ERRCODE = 'NN015';
+  END IF;
+  IF v_req.status = 'COMPLETED' THEN RETURN; END IF;                  -- idempotente
+  IF v_req.status <> 'REQUESTED' THEN
+    RAISE EXCEPTION 'requisicao encerrada (%)', v_req.status USING ERRCODE = 'NN015';
+  END IF;
+  IF v_req.identity_verified_at IS NULL THEN
+    RAISE EXCEPTION 'IDENTITY_NOT_VERIFIED' USING ERRCODE = 'NN014';
+  END IF;
+  PERFORM 1 FROM nina.app_user WHERE id = v_req.user_id AND status <> 'DELETED' FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'usuario ja excluido' USING ERRCODE = 'NN015'; END IF;
+  IF nina.is_active_baby_owner(v_req.user_id) THEN
+    RAISE EXCEPTION 'OWNER_MUST_USE_ACCOUNT_DELETION' USING ERRCODE = 'NN013';
+  END IF;
+  v_scrub := nina.scrub_user_personal_data(v_req.user_id, p_actor);
+  UPDATE nina.privacy_request SET status = 'COMPLETED', completed_at = now(), closed_reason = 'FULFILLED' WHERE id = p_request;
+  UPDATE nina.privacy_request SET status = 'CANCELLED', cancelled_at = now(), closed_reason = 'USER_ERASED'
+   WHERE user_id = v_req.user_id AND status = 'REQUESTED';            -- demais pedidos abertos perdem o objeto
+  INSERT INTO nina.audit_event (actor_user_id, actor_type, action, entity_type, entity_id, metadata_safe, is_critical)
+  VALUES (p_actor, CASE WHEN p_actor IS NULL THEN 'SYSTEM' ELSE 'ADMIN' END, 'privacy.erasure_completed', 'USER', v_req.user_id,
+          jsonb_build_object('request_id', p_request, 'on_time', now() <= v_req.due_at) || v_scrub, true);
+  INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type)
+  VALUES ('USER', v_req.user_id, 'PersonalDataErased');
 END $$;
 
 -- Job de limpeza de sync (tombstones 90 dias). Idempotente, em lotes, com lock
@@ -1435,12 +1584,17 @@ END $$;
 -- sair dos bebes (revogar o proprio vinculo).
 CREATE FUNCTION nina.can_request_account_deletion() RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = nina, pg_temp AS
-$$ SELECT EXISTS (SELECT 1 FROM nina.caregiver_membership m
-                   WHERE m.user_id = nina.current_user_id() AND m.role = 'OWNER' AND m.status = 'ACTIVE')
-       OR NOT EXISTS (SELECT 1 FROM nina.caregiver_membership m
-                       WHERE m.user_id = nina.current_user_id() AND m.status = 'ACTIVE') $$;
+$$ SELECT nina.is_active_baby_owner(nina.current_user_id()) $$;
 CREATE POLICY app_insert ON nina.account_deletion_request FOR INSERT TO nina_app
   WITH CHECK (user_id = nina.current_user_id() AND nina.can_request_account_deletion());
+-- cancelamento pelo proprio usuario; o trigger account_deletion_guard limita a SCHEDULED/BLOCKED -> CANCELLED e a janela
+CREATE POLICY app_update ON nina.account_deletion_request FOR UPDATE TO nina_app
+  USING (user_id = nina.current_user_id() AND status IN ('SCHEDULED', 'BLOCKED'))
+  WITH CHECK (user_id = nina.current_user_id() AND status = 'CANCELLED');
+
+-- privacy_request: o usuario so le os proprios; abertura/cancelamento por funcoes (auditadas)
+ALTER TABLE nina.privacy_request ENABLE ROW LEVEL SECURITY;
+CREATE POLICY app_select ON nina.privacy_request FOR SELECT TO nina_app USING (user_id = nina.current_user_id());
 
 -- baby (perfil editavel somente pelo Owner - ADR-0009)
 ALTER TABLE nina.baby ENABLE ROW LEVEL SECURITY;
@@ -1490,6 +1644,7 @@ GRANT SELECT, INSERT, UPDATE ON
   nina.notification_preference, nina.notification_job, nina.outbox_message,
   nina.subscription, nina.family_entitlement, nina.family_entitlement_member,
   nina.data_export_request, nina.account_deletion_request TO nina_app;
+GRANT SELECT ON nina.privacy_request TO nina_app;                  -- escrita so via funcoes definer
 GRANT DELETE ON nina.notification_preference, nina.device_push_token, nina.refresh_token, nina.recovery_request TO nina_app;
 GRANT SELECT ON nina.change_log, nina.tombstone, nina.plan, nina.feature_flag, nina.plan_feature,
   nina.app_parameter, nina.consent_purpose, nina.consent_current TO nina_app;
@@ -1500,13 +1655,15 @@ GRANT EXECUTE ON FUNCTION nina.current_user_id(), nina.user_plan_code(uuid), nin
   nina.sleep_overlaps(uuid), nina.night_awakenings(uuid), nina.age_calculation(date, date, date) TO nina_app;
 -- helpers de RLS e triggers: executados pelo planner/trigger com o papel corrente
 GRANT EXECUTE ON FUNCTION nina.baby_role(uuid), nina.can_read_baby(uuid), nina.can_write_baby(uuid),
-  nina.is_family_owner(uuid), nina.can_bootstrap_owner(uuid), nina.can_request_account_deletion() TO nina_app;
+  nina.is_family_owner(uuid), nina.can_bootstrap_owner(uuid), nina.can_request_account_deletion(),
+  nina.is_active_baby_owner(uuid) TO nina_app;
+GRANT EXECUTE ON FUNCTION nina.open_privacy_request(text, text), nina.cancel_privacy_request(uuid) TO nina_app;
 -- Funcoes de trigger (SECURITY DEFINER/INVOKER) precisam ser executaveis por quem dispara o trigger
 GRANT EXECUTE ON FUNCTION nina.sync_stamp_child(), nina.sync_stamp_baby(), nina.sync_log_change(),
   nina.baby_validate(), nina.check_baby_has_owner(), nina.check_entitlement_member(), nina.touch_updated_at(),
   nina.audit_chain(), nina.forbid_mutation(), nina.log_config_change(), nina.bump_param_version(),
   nina.next_sync_sequence(uuid), nina.sleep_session_cascade_wake(), nina.sleep_overlap_guard(),
-  nina.validate_app_parameter() TO nina_app, nina_config_admin;
+  nina.validate_app_parameter(), nina.account_deletion_guard() TO nina_app, nina_config_admin;
 
 -- config: editada somente por nina_config_admin (auditada por trigger)
 GRANT SELECT, INSERT, UPDATE, DELETE ON nina.plan, nina.feature_flag, nina.plan_feature, nina.app_parameter TO nina_config_admin;
