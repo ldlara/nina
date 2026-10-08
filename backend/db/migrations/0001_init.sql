@@ -3166,8 +3166,10 @@ REVOKE ALL ON ALL FUNCTIONS IN SCHEMA nina FROM PUBLIC;
 
 -- ---- nina_app: leitura/escrita onde o modelo exige, por COLUNA quando ha campos que o app nao pode mudar
 GRANT SELECT ON nina.plan, nina.feature_flag, nina.plan_feature, nina.app_parameter, nina.consent_purpose, nina.consent_current TO nina_app;
-GRANT SELECT, INSERT ON nina.app_user TO nina_app;
-GRANT UPDATE (email_verified_at, display_name, locale, timezone) ON nina.app_user TO nina_app;   -- e-mail/status: so por funcoes definer
+GRANT SELECT ON nina.app_user TO nina_app;
+-- NR-09: email_verified_at NAO esta no INSERT nem no UPDATE do app: so email_code_verify/register_social_user/email_change_confirm.
+GRANT INSERT (id, email, display_name, locale, timezone, created_at, updated_at) ON nina.app_user TO nina_app;
+GRANT UPDATE (display_name, locale, timezone) ON nina.app_user TO nina_app;   -- e-mail/status/verificacao: so por funcoes definer
 GRANT SELECT, INSERT ON nina.user_credential TO nina_app;
 GRANT UPDATE (password_hash, hash_algorithm, changed_at) ON nina.user_credential TO nina_app;
 GRANT SELECT, INSERT, DELETE ON nina.user_identity TO nina_app;
@@ -3180,7 +3182,8 @@ GRANT UPDATE (used_at) ON nina.recovery_request TO nina_app;
 GRANT SELECT, DELETE ON nina.device_push_token TO nina_app;
 GRANT SELECT, INSERT ON nina.family TO nina_app;
 GRANT SELECT, INSERT ON nina.baby TO nina_app;
-GRANT UPDATE (display_name, birth_date, due_date, sex, timezone, photo_ref, deleted_at, last_modified_by, field_versions) ON nina.baby TO nina_app;
+-- NR-06/NR-07: sem deleted_at (exclusao so por nina.delete_baby) e sem last_modified_by (fixado pelo gatilho a partir do contexto).
+GRANT UPDATE (display_name, birth_date, due_date, sex, timezone, photo_ref, field_versions) ON nina.baby TO nina_app;
 GRANT SELECT, INSERT ON nina.caregiver_membership TO nina_app;                       -- sem UPDATE/DELETE (SR-002)
 DO $$
 DECLARE t text; cols text;
@@ -3190,7 +3193,7 @@ BEGIN
     SELECT string_agg(quote_ident(a.attname), ', ' ORDER BY a.attnum) INTO cols
       FROM pg_attribute a
      WHERE a.attrelid = ('nina.' || t)::regclass AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated = ''
-       AND a.attname NOT IN ('id', 'baby_id', 'version', 'created_at', 'updated_at', 'created_by', 'computed_at');
+       AND a.attname NOT IN ('id', 'baby_id', 'version', 'created_at', 'updated_at', 'created_by', 'last_modified_by', 'computed_at');
     EXECUTE format('GRANT UPDATE (%s) ON nina.%I TO nina_app', cols, t);
   END LOOP;
 END $$;
@@ -3199,7 +3202,7 @@ GRANT SELECT, INSERT ON nina.sync_mutation TO nina_app;
 GRANT SELECT, INSERT, DELETE ON nina.notification_preference TO nina_app;
 GRANT UPDATE (enabled, lead_time_minutes, quiet_hours_start, quiet_hours_end) ON nina.notification_preference TO nina_app;
 GRANT SELECT ON nina.notification_job TO nina_app;                                   -- criado/atualizado pelo worker
-GRANT INSERT ON nina.outbox_message TO nina_app;                                     -- INSERT-only
+GRANT INSERT (aggregate_type, aggregate_id, event_type, payload) ON nina.outbox_message TO nina_app;   -- INSERT-only, so estas colunas (NR-11)
 GRANT SELECT ON nina.subscription, nina.family_entitlement, nina.family_entitlement_member TO nina_app;
 GRANT SELECT, INSERT ON nina.consent_record TO nina_app;
 GRANT SELECT, INSERT ON nina.data_export_request TO nina_app;
@@ -3221,10 +3224,11 @@ GRANT EXECUTE ON FUNCTION nina.my_plan_code(), nina.my_has_feature(text), nina.s
   nina.baby_member_refs(uuid), nina.audit(text, text, uuid, uuid, uuid, text, text, bytea, jsonb),
   nina.audit_auth_attempt(text, uuid, uuid, text, bytea, jsonb),
   nina.auth_lookup_user_by_email(text), nina.auth_lookup_identity(text, text), nina.auth_consume_recovery(bytea, timestamptz),
-  nina.consume_reauth_jti(bytea, text, uuid, timestamptz),
+  nina.reauth_issue(bytea, uuid, text[], timestamptz, timestamptz, bytea), nina.consume_reauth_jti(bytea, text, uuid),
+  nina.delete_baby(uuid, bytea, boolean), nina.register_social_user(uuid, text, text, text, text, text, text, timestamptz, bytea),
   nina.register_push_token(uuid, text, text, text, text, text, boolean, timestamptz),
-  nina.email_code_issue(bytea, timestamptz, timestamptz), nina.email_code_verify(text, bytea, timestamptz),
-  nina.email_change_create(text, bytea, timestamptz, timestamptz, bytea), nina.email_change_confirm(bytea, timestamptz),
+  nina.email_code_issue(bytea, timestamptz, timestamptz, interval, bytea), nina.email_code_verify(text, bytea, timestamptz),
+  nina.email_change_create(text, bytea, timestamptz, timestamptz, bytea, bytea), nina.email_change_confirm(bytea, timestamptz),
   nina.inspect_invitation(bytea), nina.accept_invitation(bytea, text, text, text, text, text), nina.decline_invitation(bytea),
   nina.leave_baby(uuid), nina.remove_member(uuid), nina.set_member_role(uuid, text), nina.transfer_ownership(uuid, uuid, bytea),
   nina.request_account_deletion(bytea), nina.confirm_account_deletion(uuid, bytea),
@@ -3233,7 +3237,7 @@ GRANT EXECUTE ON FUNCTION nina.my_plan_code(), nina.my_has_feature(text), nina.s
 -- ---- nina_worker: leitura ampla (menos segredos) e DML SO nas tabelas operacionais; nenhum DML em tabelas append-only
 GRANT SELECT ON ALL TABLES IN SCHEMA nina TO nina_worker;
 REVOKE SELECT ON nina.user_credential, nina.refresh_token, nina.recovery_request, nina.email_verification_code,
-  nina.email_change_request, nina.reauth_jti, nina.guard_secret FROM nina_worker;
+  nina.email_change_request, nina.reauth_jti, nina.guard_secret, nina.server_key, nina.control_lock FROM nina_worker;
 GRANT INSERT, UPDATE, DELETE ON nina.outbox_message, nina.notification_job, nina.sleep_prediction TO nina_worker;
 GRANT INSERT, UPDATE ON nina.data_export_request, nina.subscription, nina.family_entitlement, nina.family_entitlement_member TO nina_worker;
 GRANT UPDATE, DELETE ON nina.device_push_token TO nina_worker;
@@ -3315,6 +3319,23 @@ INSERT INTO nina.audit_action (action, is_critical, caller, results, allowed_key
   ('auth.reauth_failed',            false, 'PRE_AUTH',   ARRAY['FAILURE'], ARRAY[]::text[]),
   ('support.access_granted',        true,  'PRIVILEGED', ARRAY['SUCCESS', 'DENIED'], ARRAY['reason_code']),
   ('retention.job_run',             false, 'PRIVILEGED', ARRAY['SUCCESS', 'FAILURE'], ARRAY['job', 'count']);
+
+INSERT INTO nina.outbox_event_type (event_type, aggregate_type, allowed_keys) VALUES
+  ('BabyDeleted',                 'BABY',            ARRAY[]::text[]),
+  ('BabyOwnershipTransferred',    'BABY',            ARRAY[]::text[]),
+  ('CaregiverJoined',             'BABY',            ARRAY[]::text[]),
+  ('CaregiverLeft',               'BABY',            ARRAY[]::text[]),
+  ('CaregiverRemoved',            'BABY',            ARRAY[]::text[]),
+  ('ExportFileInvalidated',       'EXPORT',          ARRAY[]::text[]),
+  ('SharedBabyDeletedNotice',     'USER',            ARRAY['baby_id']),
+  ('SharedBabyDeletionScheduled', 'USER',            ARRAY['baby_id']),
+  ('AccountDeletionRequested',    'USER',            ARRAY['request_id']),
+  ('AccountDeleted',              'USER',            ARRAY[]::text[]),
+  ('PersonalDataErased',          'USER',            ARRAY[]::text[]),
+  ('EmailChanged',                'USER',            ARRAY[]::text[]),
+  ('SecurityNoticeRequested',     'USER',            ARRAY['notice']),
+  ('PrivacyRequestOpened',        'PRIVACY_REQUEST', ARRAY['request_type']),
+  ('PrivacyRequestCancelled',     'PRIVACY_REQUEST', ARRAY[]::text[]);
 
 INSERT INTO nina.schema_migration (version, description) VALUES ('0001', 'init: modelo fisico MVP (DB-001) + convencoes ADR-0009/0010 + hardening SECURITY-REVIEW-001 + sync (ARCH-003)');
 
