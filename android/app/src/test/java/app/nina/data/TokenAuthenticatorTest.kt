@@ -6,6 +6,7 @@ import app.nina.domain.model.SessionState
 import app.nina.domain.model.SignedOutReason
 import app.nina.testutil.ApiHarness
 import app.nina.testutil.Samples
+import app.nina.testutil.cachedBabyEntity
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -49,7 +50,7 @@ class TokenAuthenticatorTest {
     }
 
     @Test fun `refresh recusado encerra a sessao local sem apagar o cache`() = runTest {
-        h.babyDao.upsert(app.nina.data.repository.run { cachedBabyEntity() })
+        h.babyDao.upsert(cachedBabyEntity())
         h.enqueueProblem(401, "SESSION_REVOKED")
         h.enqueueProblem(401, "REFRESH_TOKEN_REUSED")
 

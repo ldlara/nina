@@ -19,7 +19,6 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -197,6 +196,5 @@ class AuthRepositoryTest {
         assertEquals("CHILD_DATA_GUARDIAN", body.getValue("purpose_key").jsonPrimitive.content)
         assertEquals("GRANTED", body.getValue("status").jsonPrimitive.content)
         assertEquals("ONBOARDING", body.getValue("source").jsonPrimitive.content)
-        assertNotNull(post.getHeader("Authorization").takeIf { false } ?: "sem sessão no teste")
     }
 }
