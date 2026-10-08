@@ -1,4 +1,5 @@
 using Nina.SharedKernel.Data;
+using Nina.SharedKernel.Security;
 using Npgsql;
 
 namespace Nina.Identity.Persistence;
@@ -61,21 +62,32 @@ public static class IdentityStore
     public static Task<UserRow?> FindUserByIdAsync(DbTx tx, Guid id) =>
         tx.QueryFirstAsync(UserSelect + " WHERE u.id = @id", ReadUser, Db.Uuid("id", id));
 
-    /// <summary>Exige <c>tx.SetUserAsync(id)</c> antes: a RLS só deixa o usuário inserir a própria linha.</summary>
+    /// <summary>
+    /// Exige <c>tx.SetUserAsync(id)</c> antes: a RLS só deixa o usuário inserir a própria linha, sempre NÃO verificada
+    /// (NR-09: o app não grava <c>email_verified_at</c>; só <see cref="VerifyEmailCodeAsync"/> e <see cref="RegisterSocialUserAsync"/> o definem).
+    /// </summary>
     public static Task InsertUserAsync(
-        DbTx tx, Guid id, string email, string locale, string? timezone, DateTimeOffset? verifiedAt, DateTimeOffset now, string? displayName = null) =>
+        DbTx tx, Guid id, string email, string locale, string? timezone, DateTimeOffset now, string? displayName = null) =>
         tx.ExecAsync(
             """
-            INSERT INTO nina.app_user (id, email, email_verified_at, display_name, locale, timezone, created_at, updated_at)
-            VALUES (@id, @email, @verified, @display, @locale, @tz, @now, @now)
+            INSERT INTO nina.app_user (id, email, display_name, locale, timezone, created_at, updated_at)
+            VALUES (@id, @email, @display, @locale, @tz, @now, @now)
             """,
-            Db.Uuid("id", id), Db.Text("email", email), Db.Timestamp("verified", verifiedAt), Db.Text("display", displayName),
+            Db.Uuid("id", id), Db.Text("email", email), Db.Text("display", displayName),
             Db.Text("locale", locale), Db.Text("tz", timezone), Db.Timestamp("now", now));
 
-    public static Task MarkEmailVerifiedAsync(DbTx tx, Guid userId, DateTimeOffset now) =>
-        tx.ExecAsync(
-            "UPDATE nina.app_user SET email_verified_at = COALESCE(email_verified_at, @now) WHERE id = @id",
-            Db.Uuid("id", userId), Db.Timestamp("now", now));
+    /// <summary>Cadastro social: conta já verificada (o provedor atestou o e-mail) + identidade, por função definer com MAC do servidor (NR-09).</summary>
+    public static Task RegisterSocialUserAsync(
+        DbTx tx, ServerMac mac, Guid id, string email, string? displayName, string locale, string? timezone,
+        string provider, string subject, DateTimeOffset now)
+    {
+        var at = ServerSignatures.Floor(now);
+        return tx.ExecAsync(
+            "SELECT nina.register_social_user(@id, @email, @display, @locale, @tz, @p, @s, @now, @mac)",
+            Db.Uuid("id", id), Db.Text("email", email), Db.Text("display", displayName), Db.Text("locale", locale), Db.Text("tz", timezone),
+            Db.Text("p", provider), Db.Text("s", subject), Db.Timestamp("now", at),
+            Db.Bytes("mac", mac.Sign(ServerSignatures.SocialRegister, ServerSignatures.SocialRegisterMessage(id, provider, subject, email))));
+    }
 
     public static Task UpdateProfileAsync(DbTx tx, Guid userId, string? displayName, string? locale, string? timezone) =>
         tx.ExecAsync(
@@ -127,12 +139,33 @@ public static class IdentityStore
             "INSERT INTO nina.recovery_request (user_id, token_hash, created_at, expires_at) VALUES (@u, @h, @now, @exp)",
             Db.Uuid("u", userId), Db.Bytes("h", hash), Db.Timestamp("now", now), Db.Timestamp("exp", expires));
 
-    public static async Task<DateTimeOffset?> LastRecoveryCreatedAsync(DbTx tx, Guid userId)
+    // ------------------------------------------------- código de verificação do e-mail (NR-09)
+
+    /// <summary>
+    /// Emite o código de verificação do e-mail do usuário do contexto (invalida o anterior) por <c>nina.email_code_issue</c>, assinado
+    /// pelo servidor. Devolve false (sem emitir) se a conta já está verificada/inativa ou se o último código é mais novo que
+    /// <paramref name="minInterval"/> (intervalo de reenvio). Exige <c>tx.SetUserAsync</c>.
+    /// </summary>
+    public static async Task<bool> IssueEmailCodeAsync(
+        DbTx tx, ServerMac mac, Guid userId, byte[] codeHash, DateTimeOffset now, DateTimeOffset expires, TimeSpan minInterval)
     {
-        var value = await tx.ScalarAsync<DateTime?>(
-            "SELECT max(created_at) FROM nina.recovery_request WHERE user_id = @u", Db.Uuid("u", userId));
-        return value is { } v ? new DateTimeOffset(DateTime.SpecifyKind(v, DateTimeKind.Utc)) : null;
+        var at = ServerSignatures.Floor(now);
+        var until = ServerSignatures.Floor(expires);
+        var id = await tx.ScalarAsync<Guid?>(
+            "SELECT nina.email_code_issue(@h, @now, @exp, @interval, @mac)",
+            Db.Bytes("h", codeHash), Db.Timestamp("now", at), Db.Timestamp("exp", until),
+            Db.P("interval", minInterval, NpgsqlTypes.NpgsqlDbType.Interval),
+            Db.Bytes("mac", mac.Sign(ServerSignatures.EmailCode, ServerSignatures.EmailCodeMessage(userId, codeHash, until))));
+        return id is not null;
     }
+
+    /// <summary>
+    /// Confere o código por <c>nina.email_code_verify</c> (contador de tentativas persistente e atômico; esgotado, o código é
+    /// invalidado) e, se confere, marca o e-mail como verificado. Devolve o usuário ou null (sempre sem exceção).
+    /// </summary>
+    public static Task<Guid?> VerifyEmailCodeAsync(DbTx tx, string email, byte[] codeHash, DateTimeOffset now) =>
+        tx.ScalarAsync<Guid?>(
+            "SELECT nina.email_code_verify(@e, @h, @now)", Db.Text("e", email), Db.Bytes("h", codeHash), Db.Timestamp("now", now));
 
     /// <summary>Consome (marca como usado) o código/token se ainda for válido (função definer: a busca é pelo hash, sem sessão). Devolve o usuário dono ou null.</summary>
     public static Task<Guid?> ConsumeRecoveryAsync(DbTx tx, byte[] hash, DateTimeOffset now) =>
@@ -141,13 +174,31 @@ public static class IdentityStore
             Db.Bytes("h", hash), Db.Timestamp("now", now));
 
     /// <summary>
-    /// Registra o <c>jti</c> de reautenticação (hash) no livro-razão <c>nina.reauth_jti</c> (uso único atômico entre instâncias, com escopo e
-    /// contador de reapresentações); false se já existia. Exige <c>tx.SetUserAsync</c>.
+    /// Emite no livro-razão <c>nina.reauth_jti</c> o <c>jti</c> (hash) do token de reautenticação que a API acabou de assinar, com
+    /// usuário, sessão, escopos e validade, por <c>nina.reauth_issue</c> e MAC do servidor (NR-03: só vale jti emitido pelo servidor).
+    /// Exige <c>tx.SetUserAsync</c>.
     /// </summary>
-    public static async Task<bool> TryConsumeReauthJtiAsync(DbTx tx, byte[] hash, string scope, Guid sessionId, DateTimeOffset expires) =>
+    public static Task IssueReauthAsync(
+        DbTx tx, ServerMac mac, Guid userId, byte[] jtiHash, Guid sessionId, IReadOnlyCollection<string> scopes,
+        DateTimeOffset issued, DateTimeOffset expires)
+    {
+        var from = ServerSignatures.Floor(issued);
+        var until = ServerSignatures.Floor(expires);
+        return tx.ExecAsync(
+            "SELECT nina.reauth_issue(@h, @s, @scopes, @iat, @exp, @mac)",
+            Db.Bytes("h", jtiHash), Db.Uuid("s", sessionId),
+            Db.P("scopes", scopes.ToArray(), NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Text),
+            Db.Timestamp("iat", from), Db.Timestamp("exp", until),
+            Db.Bytes("mac", mac.Sign(ServerSignatures.ReauthIssue, ServerSignatures.ReauthIssueMessage(userId, sessionId, jtiHash, scopes, from, until))));
+    }
+
+    /// <summary>
+    /// Consome (uso único atômico entre instâncias) o <c>jti</c> de reautenticação já EMITIDO para este usuário e esta sessão, no
+    /// escopo pedido; false se foi forjado, já consumido, expirado ou de outro escopo/sessão. Exige <c>tx.SetUserAsync</c>.
+    /// </summary>
+    public static async Task<bool> TryConsumeReauthJtiAsync(DbTx tx, byte[] hash, string scope, Guid sessionId) =>
         await tx.ScalarAsync<bool>(
-            "SELECT nina.consume_reauth_jti(@h, @scope, @s, @exp)",
-            Db.Bytes("h", hash), Db.Text("scope", scope), Db.Uuid("s", sessionId), Db.Timestamp("exp", expires));
+            "SELECT nina.consume_reauth_jti(@h, @scope, @s)", Db.Bytes("h", hash), Db.Text("scope", scope), Db.Uuid("s", sessionId));
 
     public static Task InvalidateOpenRecoveryAsync(DbTx tx, Guid userId, DateTimeOffset now) =>
         tx.ExecAsync(
