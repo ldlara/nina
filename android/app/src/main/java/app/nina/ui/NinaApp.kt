@@ -32,6 +32,13 @@ import app.nina.ui.invite.InviteAcceptScreen
 import app.nina.ui.invite.InviteAcceptViewModel
 import app.nina.ui.navigation.Routes
 import app.nina.ui.onboarding.OnboardingScreen
+import app.nina.ui.timeline.TimelineScreen
+import app.nina.ui.timeline.TimelineViewModel
+import app.nina.ui.today.TodayScreen
+import app.nina.ui.today.TodayViewModel
+import app.nina.ui.tracking.EventFormScreen
+import app.nina.ui.tracking.EventFormViewModel
+import app.nina.ui.tracking.FormKind
 
 @Composable
 fun NinaApp(container: AppContainer) {
@@ -114,6 +121,7 @@ fun NinaApp(container: AppContainer) {
                 viewModel = vm,
                 onAddBaby = { navController.navigate(Routes.BABY_NEW) },
                 onOpenBaby = { navController.navigate(Routes.baby(it)) },
+                onOpenTracking = { navController.navigate(Routes.today(it)) },
                 onCaregivers = { navController.navigate(Routes.caregivers(it)) },
                 onAcceptInvite = { navController.navigate(Routes.ACCEPT_INVITE) },
             )
@@ -157,6 +165,79 @@ fun NinaApp(container: AppContainer) {
                 onBack = { navController.popBackStack() },
                 onLeftBaby = { navController.popBackStack(Routes.BABIES, inclusive = false) },
             )
+        }
+        composable(Routes.TODAY, arguments = listOf(navArgument("babyId") { type = NavType.StringType })) { entry ->
+            val babyId = entry.arguments?.getString("babyId").orEmpty()
+            val vm: TodayViewModel = viewModel(
+                factory = viewModelFactory {
+                    initializer {
+                        TodayViewModel(
+                            babyId, container.babyRepository, container.trackingRepository, container.syncIndicator.indicator,
+                            container.syncEngine, container.clock, container.trackingLimits,
+                        )
+                    }
+                },
+            )
+            TodayScreen(
+                viewModel = vm,
+                onBack = { navController.popBackStack() },
+                onOpenTimeline = { navController.navigate(Routes.timeline(babyId)) },
+                onNewEvent = { navController.navigate(Routes.eventNew(babyId, it.name.lowercase())) },
+                onEditEvent = { navController.navigate(Routes.eventEdit(babyId, it)) },
+            )
+        }
+        composable(Routes.TIMELINE, arguments = listOf(navArgument("babyId") { type = NavType.StringType })) { entry ->
+            val babyId = entry.arguments?.getString("babyId").orEmpty()
+            val vm: TimelineViewModel = viewModel(
+                factory = viewModelFactory {
+                    initializer {
+                        TimelineViewModel(
+                            babyId, container.babyRepository, container.trackingRepository, container.syncIndicator.indicator,
+                            container.syncEngine, container.clock,
+                        )
+                    }
+                },
+            )
+            TimelineScreen(
+                viewModel = vm,
+                onBack = { navController.popBackStack() },
+                onOpenToday = {
+                    if (!navController.popBackStack(Routes.TODAY, inclusive = false)) navController.navigate(Routes.today(babyId))
+                },
+                onNewEvent = { navController.navigate(Routes.eventNew(babyId, it.name.lowercase())) },
+                onEditEvent = { navController.navigate(Routes.eventEdit(babyId, it)) },
+            )
+        }
+        composable(
+            Routes.EVENT_NEW,
+            arguments = listOf(navArgument("babyId") { type = NavType.StringType }, navArgument("kind") { type = NavType.StringType }),
+        ) { entry ->
+            val babyId = entry.arguments?.getString("babyId").orEmpty()
+            val kind = entry.arguments?.getString("kind").orEmpty()
+            val vm: EventFormViewModel = viewModel(
+                factory = viewModelFactory {
+                    initializer {
+                        val k = FormKind.entries.firstOrNull { it.name.equals(kind, ignoreCase = true) } ?: FormKind.SLEEP
+                        EventFormViewModel(babyId, null, k, container.babyRepository, container.trackingRepository, container.clock, container.trackingLimits)
+                    }
+                },
+            )
+            EventFormScreen(vm, onClose = { navController.popBackStack() }, limits = container.trackingLimits)
+        }
+        composable(
+            Routes.EVENT_EDIT,
+            arguments = listOf(navArgument("babyId") { type = NavType.StringType }, navArgument("eventId") { type = NavType.StringType }),
+        ) { entry ->
+            val babyId = entry.arguments?.getString("babyId").orEmpty()
+            val eventId = entry.arguments?.getString("eventId").orEmpty()
+            val vm: EventFormViewModel = viewModel(
+                factory = viewModelFactory {
+                    initializer {
+                        EventFormViewModel(babyId, eventId, null, container.babyRepository, container.trackingRepository, container.clock, container.trackingLimits)
+                    }
+                },
+            )
+            EventFormScreen(vm, onClose = { navController.popBackStack() }, limits = container.trackingLimits)
         }
         composable(Routes.ACCEPT_INVITE) {
             val vm: InviteAcceptViewModel = viewModel(

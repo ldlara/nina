@@ -39,6 +39,7 @@ fun BabiesScreen(
     viewModel: BabiesViewModel,
     onAddBaby: () -> Unit,
     onOpenBaby: (String) -> Unit,
+    onOpenTracking: (String) -> Unit,
     onCaregivers: (String) -> Unit,
     onAcceptInvite: () -> Unit,
 ) {
@@ -78,7 +79,7 @@ fun BabiesScreen(
                 }
             }
             items(state.babies, key = { it.id }) { baby ->
-                BabyCard(baby, onOpen = { onOpenBaby(baby.id) }, onCaregivers = { onCaregivers(baby.id) })
+                BabyCard(baby, onOpen = { onOpenBaby(baby.id) }, onTracking = { onOpenTracking(baby.id) }, onCaregivers = { onCaregivers(baby.id) })
             }
             item { NinaPrimaryButton(stringResource(R.string.babies_add), onClick = onAddBaby) }
             item { NinaSecondaryButton(stringResource(R.string.babies_accept_invite), onClick = onAcceptInvite) }
@@ -87,7 +88,7 @@ fun BabiesScreen(
 }
 
 @Composable
-private fun BabyCard(baby: Baby, onOpen: () -> Unit, onCaregivers: () -> Unit) {
+private fun BabyCard(baby: Baby, onOpen: () -> Unit, onTracking: () -> Unit, onCaregivers: () -> Unit) {
     val context = LocalContext.current
     val age = baby.ageCalculation?.let { formatAgeDays(context, it.chronologicalDays) }.orEmpty()
     val role = stringResource(baby.myRole.labelRes())
@@ -95,6 +96,7 @@ private fun BabyCard(baby: Baby, onOpen: () -> Unit, onCaregivers: () -> Unit) {
         Text(baby.displayName, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
         if (age.isNotEmpty()) Text(age, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(role, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        NinaPrimaryButton(stringResource(R.string.babies_open_tracking), onClick = onTracking)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(NinaDimens.space2)) {
             NinaTextButton(stringResource(R.string.babies_open_profile), onClick = onOpen)
             NinaTextButton(stringResource(R.string.babies_caregivers), onClick = onCaregivers)
