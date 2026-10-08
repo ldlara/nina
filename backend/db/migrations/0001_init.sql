@@ -621,6 +621,11 @@ CREATE TRIGGER membership_a_guard BEFORE UPDATE ON nina.caregiver_membership FOR
 CREATE FUNCTION nina.membership_invite_limit() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
 BEGIN
+  -- NR-05: convite em nome de OUTRO usuario e negado como a RLS nega (nunca revela o contador diario de terceiros)
+  IF NEW.status = 'PENDING' AND NEW.invited_by IS NOT NULL AND nina.is_app_session()
+     AND NEW.invited_by IS DISTINCT FROM nina.current_user_id() THEN
+    RAISE EXCEPTION 'new row violates row-level security policy for table "caregiver_membership"' USING ERRCODE = '42501';
+  END IF;
   IF NEW.status = 'PENDING' AND NEW.invited_by IS NOT NULL
      AND (SELECT count(*) FROM nina.caregiver_membership m
            WHERE m.invited_by = NEW.invited_by AND m.invited_at > now() - interval '24 hours')
@@ -692,12 +697,15 @@ CREATE FUNCTION nina.is_family_owner(p_family uuid) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = nina, pg_temp AS
 $$ SELECT EXISTS (SELECT 1 FROM nina.family f WHERE f.id = p_family AND f.owner_user_id = nina.current_user_id()) $$;
 
--- NR-13: so responde "sim" a quem tem (ou teve) vinculo com o bebe; para um UUID alheio ou inexistente a resposta e sempre false
--- (sem oraculo de existencia). Uso: politica de SELECT de baby no instante de criacao (a propria familia, ainda sem Owner).
+-- NR-13: so responde "sim" a quem tem (ou teve) vinculo com o bebe ou e titular da familia dele; para um UUID alheio ou
+-- inexistente a resposta e sempre false (sem oraculo de existencia). Uso: politica de SELECT de baby no instante de criacao (a
+-- propria familia, ainda sem Owner).
 CREATE FUNCTION nina.baby_ever_had_owner(p_baby uuid) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = nina, pg_temp AS
 $$ SELECT EXISTS (SELECT 1 FROM nina.caregiver_membership m WHERE m.baby_id = p_baby AND m.role = 'OWNER')
-      AND EXISTS (SELECT 1 FROM nina.caregiver_membership me WHERE me.baby_id = p_baby AND me.user_id = nina.current_user_id()) $$;
+      AND (EXISTS (SELECT 1 FROM nina.caregiver_membership me WHERE me.baby_id = p_baby AND me.user_id = nina.current_user_id())
+           OR EXISTS (SELECT 1 FROM nina.baby b JOIN nina.family f ON f.id = b.family_id
+                       WHERE b.id = p_baby AND f.owner_user_id = nina.current_user_id())) $$;
 
 -- Criador do bebe vira Owner (RB-006): bebe da PROPRIA familia que ainda nunca teve vinculo OWNER (nem revogado).
 CREATE FUNCTION nina.can_bootstrap_owner(p_baby uuid) RETURNS boolean
@@ -781,10 +789,16 @@ CREATE FUNCTION nina.sync_stamp_child() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
 BEGIN
   IF TG_OP = 'INSERT' THEN
+    PERFORM nina.rls_precheck_baby(NEW.baby_id, TG_TABLE_NAME);        -- NR-05: antes de qualquer erro de negocio ou lock do bebe
     IF EXISTS (SELECT 1 FROM nina.baby b WHERE b.id = NEW.baby_id AND b.deleted_at IS NOT NULL) THEN
       RAISE EXCEPTION 'bebe % excluido', NEW.baby_id USING ERRCODE = 'NN003';
     END IF;
     NEW.created_at := now();
+    -- NR-06: a autoria vem do CONTEXTO (nina.user_id), nunca do cliente. Sem contexto (dono/sistema) vale o valor informado.
+    IF nina.current_user_id() IS NOT NULL THEN
+      NEW.created_by := nina.current_user_id();
+      NEW.last_modified_by := nina.current_user_id();
+    END IF;
   ELSE
     IF nina.guard_ok('authorship_scrub') THEN
       -- Eliminacao de autoria (ADR-0010, scrub_user_personal_data): so os ponteiros created_by/last_modified_by do
@@ -802,6 +816,8 @@ BEGIN
       RAISE EXCEPTION 'entidade com tombstone nao pode ser alterada/ressuscitada (INV-20)' USING ERRCODE = 'NN002';
     END IF;
     NEW.created_at := OLD.created_at;
+    NEW.created_by := OLD.created_by;                                  -- NR-06: autoria de criacao e imutavel
+    IF nina.current_user_id() IS NOT NULL THEN NEW.last_modified_by := nina.current_user_id(); END IF;
   END IF;
   IF NEW.deleted_at IS NOT NULL THEN      -- tombstone sem conteudo livre
     NEW := jsonb_populate_record(NEW, jsonb_build_object('notes', NULL, 'field_versions', '{}'::jsonb));
@@ -826,8 +842,18 @@ BEGIN
       RAISE EXCEPTION 'bebe excluido nao pode ser alterado (INV-20)' USING ERRCODE = 'NN002';
     END IF;
     NEW.created_at := OLD.created_at;
+    NEW.created_by := OLD.created_by;                                  -- NR-06
+    IF nina.current_user_id() IS NOT NULL THEN NEW.last_modified_by := nina.current_user_id(); END IF;
   ELSE
     NEW.created_at := now();
+    IF nina.current_user_id() IS NOT NULL THEN                         -- NR-06
+      NEW.created_by := nina.current_user_id();
+      NEW.last_modified_by := nina.current_user_id();
+    END IF;
+  END IF;
+  -- NR-07: a exclusao de bebe so existe por nina.delete_baby/erase_baby (ficha 'baby_delete'): reauth, auditoria e aviso aos cuidadores.
+  IF NEW.deleted_at IS NOT NULL AND (TG_OP = 'INSERT' OR OLD.deleted_at IS NULL) AND NOT nina.guard_ok('baby_delete') THEN
+    RAISE EXCEPTION 'bebe so e excluido por nina.delete_baby (reautenticacao, auditoria e aviso aos cuidadores)' USING ERRCODE = 'NN052';
   END IF;
   NEW.updated_at := now();
   NEW.version := nina.next_sync_sequence(NEW.id);
@@ -1069,6 +1095,7 @@ CREATE TRIGGER sleep_session_wake_cascade AFTER UPDATE ON nina.sleep_session
 CREATE FUNCTION nina.sleep_overlap_guard() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
 BEGIN
+  IF TG_OP = 'INSERT' THEN PERFORM nina.rls_precheck_baby(NEW.baby_id, TG_TABLE_NAME); END IF;   -- NR-05: SLEEP_OVERLAP nunca antes da RLS
   IF TG_OP = 'UPDATE' AND NEW.start_at IS NOT DISTINCT FROM OLD.start_at AND NEW.end_at IS NOT DISTINCT FROM OLD.end_at THEN
     RETURN NEW;      -- intervalo inalterado: nao re-julga dados aceitos sob a politica anterior
   END IF;
@@ -1094,6 +1121,7 @@ CREATE FUNCTION nina.wake_event_session_guard() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
 DECLARE v_tz text; v_deleted timestamptz; v_found boolean;
 BEGIN
+  IF TG_OP = 'INSERT' THEN PERFORM nina.rls_precheck_baby(NEW.baby_id, TG_TABLE_NAME); END IF;   -- NR-05
   SELECT true, s.tz, s.deleted_at INTO v_found, v_tz, v_deleted
     FROM nina.sleep_session s WHERE s.baby_id = NEW.baby_id AND s.id = NEW.sleep_session_id;
   IF TG_OP = 'INSERT' AND NEW.tz IS NULL AND v_found THEN NEW.tz := v_tz; END IF;
@@ -1443,7 +1471,9 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
 DECLARE v_prev bytea; v_seq bigint;
 BEGIN
   IF NEW.is_critical OR NEW.result = 'DENIED' OR NEW.actor_type <> 'USER' THEN
-    PERFORM pg_advisory_xact_lock(hashtextextended('nina.audit_chain', 0));
+    -- NR-04: serializa pelo lock de LINHA da tabela privada de controle (nao por advisory lock de chave previsivel); aguarda no maximo
+    -- lock_timeout do papel e FALHA ALTO (55P03) em vez de esperar sem limite.
+    PERFORM 1 FROM nina.control_lock WHERE name = 'audit_chain' FOR UPDATE;
     SELECT chain_seq, row_hash INTO v_seq, v_prev FROM nina.audit_event
      WHERE chain_seq IS NOT NULL ORDER BY chain_seq DESC LIMIT 1;
     IF v_seq IS NULL THEN   -- cadeia vazia (apos purga total): continua do checkpoint
@@ -1824,6 +1854,17 @@ COMMENT ON TABLE nina.privacy_request IS 'ADR-0010 item 3: caminho de DSAR para 
 --    mudancas privilegiadas (autoria, vinculo, propriedade) e dispensam o worker de DML direto nas tabelas de tenant.
 -- -----------------------------------------------------------------------------
 
+-- Lock de uma purga (NR-04): linha da tabela privada de controle, SEM esperar. Se outra execucao a segura, a purga FALHA com
+-- PURGE_LOCK_BUSY (NN032): o agendador do worker ve o erro e alerta, em vez de a retencao parar em silencio.
+CREATE FUNCTION nina.take_purge_lock(p_name text) RETURNS void
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
+BEGIN
+  PERFORM 1 FROM nina.control_lock WHERE name = p_name FOR UPDATE NOWAIT;
+  IF NOT FOUND THEN RAISE EXCEPTION 'lock de purga % inexistente', p_name USING ERRCODE = 'NN032'; END IF;
+EXCEPTION WHEN lock_not_available THEN
+  RAISE EXCEPTION 'PURGE_LOCK_BUSY: a purga % ja esta em execucao (ou travada); nada foi apagado', p_name USING ERRCODE = 'NN032';
+END $$;
+
 -- Fila de exclusoes que sobrevive aos backups (SEC-064/SR-011): so ids, sem PII. Apos um restore, reapply_erasure_ledger()
 -- reexecuta as exclusoes que o backup ressuscitou. Retencao >= ciclo de backup (35 dias): 'erasure_ledger.retention_days'.
 CREATE TABLE nina.erasure_ledger (
@@ -2182,9 +2223,7 @@ DECLARE
   v_log_days integer := nina.param_int('sync.changelog_retention_days', 90);
   v_cl bigint := 0; v_ts bigint := 0; v_mu bigint := 0; r record;
 BEGIN
-  IF NOT pg_try_advisory_xact_lock(hashtextextended('nina.purge_expired_sync_data', 0)) THEN
-    RETURN QUERY SELECT 0::bigint, 0::bigint, 0::bigint; RETURN;
-  END IF;
+  PERFORM nina.take_purge_lock('purge_sync');         -- NR-04: ocupado = ERRO explicito (nunca "0 linhas" silencioso)
 
   -- 1) poda o change log e sobe o piso do cursor por bebe
   WITH del AS (
@@ -2234,7 +2273,7 @@ CREATE FUNCTION nina.purge_expired_operational_data(p_batch integer DEFAULT 5000
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
 DECLARE v jsonb := '{}'::jsonb; n bigint;
 BEGIN
-  IF NOT pg_try_advisory_xact_lock(hashtextextended('nina.purge_expired_operational_data', 0)) THEN RETURN v; END IF;
+  PERFORM nina.take_purge_lock('purge_operational');  -- NR-04
 
   DELETE FROM nina.auth_session WHERE id IN (SELECT id FROM nina.auth_session
      WHERE absolute_expires_at < now() - interval '30 days' OR revoked_at < now() - interval '30 days' LIMIT p_batch);
@@ -2307,7 +2346,7 @@ BEGIN
   IF p_batch IS NULL OR p_batch < 1 OR p_batch > 100000 THEN
     RAISE EXCEPTION 'lote invalido' USING ERRCODE = 'NN031';
   END IF;
-  PERFORM pg_advisory_xact_lock(hashtextextended('nina.purge_audit', 0));
+  PERFORM nina.take_purge_lock('purge_audit');
   v_cut := now() - p_older_than;
   v_cut_chain := now() - greatest(p_older_than, v_floor_chain);
   -- eventos encadeados saem como PREFIXO da cadeia (ordem de chain_seq), para que a verificacao recomece do checkpoint
@@ -2347,7 +2386,7 @@ BEGIN
     RAISE EXCEPTION 'PURGE_BELOW_FLOOR: o consentimento so pode ser purgado apos %', v_floor USING ERRCODE = 'NN031';
   END IF;
   IF p_batch IS NULL OR p_batch < 1 OR p_batch > 100000 THEN RAISE EXCEPTION 'lote invalido' USING ERRCODE = 'NN031'; END IF;
-  PERFORM pg_advisory_xact_lock(hashtextextended('nina.purge_consent', 0));
+  PERFORM nina.take_purge_lock('purge_consent');
   SELECT array_agg(consent_id) INTO v_ids FROM (
     SELECT c.consent_id FROM nina.consent_record c
      WHERE c.recorded_at < now() - p_older_than
