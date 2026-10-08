@@ -72,8 +72,14 @@ public static class SharedKernelExtensions
     }
 }
 
-/// <summary>Aplica as migrações na inicialização quando <c>Database:ApplyMigrations=true</c> (conexão de dono em <c>ConnectionStrings:Migrations</c>).</summary>
-public sealed class MigrationHostedService(IOptions<DatabaseOptions> options, IConfiguration configuration) : IHostedService
+/// <summary>
+/// Aplica as migrações na inicialização quando <c>Database:ApplyMigrations=true</c> (conexão de dono em <c>ConnectionStrings:Migrations</c>)
+/// e instala em <c>nina.server_key</c> a chave de assinatura servidor-banco derivada do <c>Security:MasterKey</c> (NR-03/NR-09).
+/// NR-16: a flag só é aceita em Development; em produção as migrações rodam num Job separado, com credencial de dono que NÃO é a do pod
+/// da API, e o mesmo Job instala a chave (<c>SELECT nina.provision_server_key(decode('&lt;hex&gt;', 'hex'))</c>).
+/// </summary>
+public sealed class MigrationHostedService(
+    IOptions<DatabaseOptions> options, IConfiguration configuration, IHostEnvironment environment, IServiceProvider services) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -82,12 +88,20 @@ public sealed class MigrationHostedService(IOptions<DatabaseOptions> options, IC
             return;
         }
 
+        if (!environment.IsDevelopment())
+        {
+            throw new InvalidOperationException(
+                "Database:ApplyMigrations só é aceito em Development (NR-16). Em produção aplique as migrações num Job com credencial de dono, separado do pod da API.");
+        }
+
         var cs = configuration.GetConnectionString("Migrations")
                  ?? throw new InvalidOperationException("ConnectionStrings:Migrations não configurada.");
         var dir = options.Value.MigrationsPath
                   ?? MigrationRunner.FindDefaultDirectory(AppContext.BaseDirectory)
                   ?? throw new InvalidOperationException("Diretório de migrações não encontrado (Database:MigrationsPath).");
-        await new MigrationRunner(cs, dir).ApplyAsync(cancellationToken);
+        var runner = new MigrationRunner(cs, dir);
+        await runner.ApplyAsync(cancellationToken);
+        await runner.ProvisionServerKeyAsync(services.GetRequiredService<ServerMac>().Key, cancellationToken);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

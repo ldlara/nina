@@ -43,6 +43,19 @@ public sealed class MigrationRunner(string adminConnectionString, string directo
         return applied;
     }
 
+    /// <summary>
+    /// Instala (ou troca) a chave de assinatura servidor-banco em <c>nina.server_key</c> (<c>nina.provision_server_key</c>, só o dono executa).
+    /// Sem ela as funções assinadas (<c>reauth_issue</c>, <c>email_code_issue</c>...) falham fechado (<c>NN070</c>).
+    /// </summary>
+    public async Task ProvisionServerKeyAsync(byte[] key, CancellationToken cancellationToken)
+    {
+        await using var connection = new NpgsqlConnection(adminConnectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var cmd = new NpgsqlCommand("SELECT nina.provision_server_key(@k)", connection);
+        cmd.Parameters.Add(new NpgsqlParameter("k", NpgsqlTypes.NpgsqlDbType.Bytea) { Value = key });
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     /// <summary>Localiza <c>backend/db/migrations</c> subindo a partir de um diretório base.</summary>
     public static string? FindDefaultDirectory(string startDirectory)
     {

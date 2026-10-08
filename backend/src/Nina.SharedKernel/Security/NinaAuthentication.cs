@@ -18,6 +18,7 @@ public static class NinaAuthentication
         services.AddOptions<JwtOptions>().Bind(configuration.GetSection(JwtOptions.SectionName));
         services.AddOptions<SecurityOptions>().Bind(configuration.GetSection(SecurityOptions.SectionName));
         services.TryAddSingleton<SecretKeys>();
+        services.TryAddSingleton<ServerMac>();
         services.TryAddSingleton<JwtKeyring>();
 
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
