@@ -266,7 +266,7 @@ paths:
               properties:
                 email: { type: string, format: email }
       responses:
-        '202': { description: Se o e-mail existir, instruções foram enviadas. }
+        '202': { description: 'Se o e-mail existir, instruções foram enviadas.' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
   /auth/password/reset:
@@ -1740,7 +1740,7 @@ paths:
       tags: [Privacy]
       operationId: createExportDownloadLink
       summary: Gerar link assinado de download
-      description: Exige `X-Reauth-Token`. URL de curta duração e uso único, acessível só ao titular (RF-044-A4). Pedido ainda em processamento: `409`.
+      description: 'Exige `X-Reauth-Token`. URL de curta duração e uso único, acessível só ao titular (RF-044-A4). Pedido ainda em processamento: `409`.'
       x-rf: [RF-044, RF-055]
       x-roles: [Any]
       parameters:
@@ -2586,7 +2586,7 @@ components:
         inviter_display_name: { type: string }
         baby_label:
           type: string
-          description: Rótulo reduzido (ex.: inicial/apelido curto); nome completo só após o aceite.
+          description: 'Rótulo reduzido (ex.: inicial/apelido curto); nome completo só após o aceite.'
         role: { $ref: '#/components/schemas/InvitableRole' }
         expires_at: { type: string, format: date-time }
         visible_data:
