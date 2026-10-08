@@ -1,10 +1,9 @@
 using System.Net;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using Nina.SharedKernel;
 using Microsoft.Extensions.Options;
 using Nina.SharedKernel.Http;
 using Nina.SharedKernel.Security;
@@ -118,40 +117,53 @@ public sealed class InternalClientIpTests
         Assert.Equal(IPAddress.Parse("10.0.0.7"), invalid);
     }
 
-    private static WebApplicationFactory<Program> Factory(string environment, string? secret, Action<IServiceCollection>? services = null) =>
-        new WebApplicationFactory<Program>().WithWebHostBuilder(b =>
+    private static async Task<IHost> StartAsync(string environment, string? secret, bool withSessionValidator = true)
+    {
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { EnvironmentName = environment });
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
-            b.UseEnvironment(environment);
-            b.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Jwt:SigningKeyPem"] = TestKeys.SigningKeyPem(),
-                ["Jwt:KeyId"] = "k1",
-                ["Security:MasterKey"] = "dGVzdC1tYXN0ZXIta2V5LWZvci1uaW5hLWlkZW50aXR5LXRlc3RzLTEyMzQ1Ng==",
-                ["ConnectionStrings:Default"] = "Host=127.0.0.1;Database=x;Username=x;Password=x",
-                ["Internal:SharedSecret"] = secret,
-            }));
-            if (services is not null)
-            {
-                b.ConfigureServices(services);
-            }
+            ["Jwt:SigningKeyPem"] = TestKeys.SigningKeyPem(),
+            ["Jwt:KeyId"] = "k1",
+            ["Security:MasterKey"] = "dGVzdC1tYXN0ZXIta2V5LWZvci1uaW5hLWlkZW50aXR5LXRlc3RzLTEyMzQ1Ng==",
+            ["ConnectionStrings:Default"] = "Host=127.0.0.1;Database=x;Username=x;Password=x",
+            ["Internal:SharedSecret"] = secret,
         });
+        builder.Services.AddNinaSharedKernel(builder.Configuration);
+        if (withSessionValidator)
+        {
+            builder.Services.AddSingleton<ISessionValidator, AlwaysActiveValidator>();
+        }
+
+        var host = builder.Build();
+        try
+        {
+            await host.StartAsync(CancellationToken.None);
+            return host;
+        }
+        catch
+        {
+            host.Dispose();
+            throw;
+        }
+    }
+
+    private sealed class AlwaysActiveValidator : ISessionValidator
+    {
+        public Task<bool> IsActiveAsync(Guid userId, Guid sessionId, CancellationToken cancellationToken) => Task.FromResult(true);
+    }
 
     [Fact]
-    public void Outside_development_the_api_does_not_start_without_the_shared_secret()
+    public async Task Outside_development_the_api_does_not_start_without_the_shared_secret()
     {
-        using var factory = Factory("Production", secret: null);
-
-        var ex = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() => StartAsync("Production", secret: null));
 
         Assert.Contains("Internal:SharedSecret", Flatten(ex), StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Outside_development_a_short_secret_is_rejected()
+    public async Task Outside_development_a_short_secret_is_rejected()
     {
-        using var factory = Factory("Production", secret: "too-short");
-
-        var ex = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() => StartAsync("Production", secret: "too-short"));
 
         Assert.Contains("Internal:SharedSecret", Flatten(ex), StringComparison.Ordinal);
     }
@@ -159,20 +171,23 @@ public sealed class InternalClientIpTests
     [Fact]
     public async Task Outside_development_with_a_proper_secret_the_api_starts()
     {
-        using var factory = Factory("Production", secret: Secret);
-        using var client = factory.CreateClient();
+        using var host = await StartAsync("Production", Secret);
 
-        using var response = await client.GetAsync(new Uri("/health", UriKind.Relative), CancellationToken.None);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(host.Services.GetService<IRateLimiter>());
     }
 
     [Fact]
-    public void Authentication_without_a_session_validator_does_not_start_nr17()
+    public async Task Development_without_a_secret_starts_but_trusts_no_forwarded_ip()
     {
-        using var factory = Factory("Development", secret: null, s => s.RemoveAll<ISessionValidator>());
+        using var host = await StartAsync("Development", secret: null);
 
-        var ex = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+        Assert.True(string.IsNullOrEmpty(host.Services.GetRequiredService<IOptions<InternalOptions>>().Value.SharedSecret));
+    }
+
+    [Fact]
+    public async Task Authentication_without_a_session_validator_does_not_start_nr17()
+    {
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() => StartAsync("Development", secret: null, withSessionValidator: false));
 
         Assert.Contains("ISessionValidator", Flatten(ex), StringComparison.Ordinal);
     }

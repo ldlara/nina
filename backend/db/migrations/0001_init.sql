@@ -649,9 +649,11 @@ CREATE CONSTRAINT TRIGGER membership_owner_present
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION nina.check_baby_has_owner();
 
 -- Helpers de autorizacao (SECURITY DEFINER para nao recursar nas politicas de RLS)
+-- NR-07: bebe excluido (casca/tombstone) nao e legivel nem gravavel por ninguem pelo app: vinculos e eventos ficam ilegiveis
+-- (baby_role, readable_babies e writable_babies ignoram bebe com deleted_at).
 CREATE FUNCTION nina.baby_role(p_baby uuid) RETURNS text
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = nina, pg_temp AS
-$$ SELECT m.role FROM nina.caregiver_membership m
+$$ SELECT m.role FROM nina.caregiver_membership m JOIN nina.baby b ON b.id = m.baby_id AND b.deleted_at IS NULL
     WHERE m.baby_id = p_baby AND m.user_id = nina.current_user_id() AND m.status = 'ACTIVE' $$;
 
 CREATE FUNCTION nina.can_read_baby(p_baby uuid) RETURNS boolean
@@ -667,21 +669,35 @@ $$ SELECT coalesce(nina.baby_role(p_baby) IN ('OWNER', 'CAREGIVER'), false) $$;
 -- can_read_baby/can_write_baby (snapshot de 20 mil eventos: 29,4 s -> 0,41 s no spike).
 CREATE FUNCTION nina.readable_babies() RETURNS SETOF uuid
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = nina, pg_temp AS
-$$ SELECT m.baby_id FROM nina.caregiver_membership m
+$$ SELECT m.baby_id FROM nina.caregiver_membership m JOIN nina.baby b ON b.id = m.baby_id AND b.deleted_at IS NULL
     WHERE m.user_id = nina.current_user_id() AND m.status = 'ACTIVE' $$;
 
 CREATE FUNCTION nina.writable_babies() RETURNS SETOF uuid
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = nina, pg_temp AS
-$$ SELECT m.baby_id FROM nina.caregiver_membership m
+$$ SELECT m.baby_id FROM nina.caregiver_membership m JOIN nina.baby b ON b.id = m.baby_id AND b.deleted_at IS NULL
     WHERE m.user_id = nina.current_user_id() AND m.status = 'ACTIVE' AND m.role IN ('OWNER', 'CAREGIVER') $$;
+
+-- NR-05: gatilhos BEFORE INSERT rodam ANTES do WITH CHECK da RLS. Os que sao SECURITY DEFINER chamam isto primeiro: para uma sessao
+-- do app que NAO pode escrever no bebe, o erro e o MESMO da politica (42501), nunca um erro de negocio (SLEEP_OVERLAP, bebe excluido,
+-- despertar sem sessao...) que revelaria dados de outro tenant, e antes de tocar no contador do bebe (sem oraculo de tempo/lock).
+CREATE FUNCTION nina.rls_precheck_baby(p_baby uuid, p_table text) RETURNS void
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
+BEGIN
+  IF nina.is_app_session() AND NOT EXISTS (SELECT 1 FROM nina.writable_babies() w WHERE w = p_baby) THEN
+    RAISE EXCEPTION 'new row violates row-level security policy for table "%"', p_table USING ERRCODE = '42501';
+  END IF;
+END $$;
 
 CREATE FUNCTION nina.is_family_owner(p_family uuid) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = nina, pg_temp AS
 $$ SELECT EXISTS (SELECT 1 FROM nina.family f WHERE f.id = p_family AND f.owner_user_id = nina.current_user_id()) $$;
 
+-- NR-13: so responde "sim" a quem tem (ou teve) vinculo com o bebe; para um UUID alheio ou inexistente a resposta e sempre false
+-- (sem oraculo de existencia). Uso: politica de SELECT de baby no instante de criacao (a propria familia, ainda sem Owner).
 CREATE FUNCTION nina.baby_ever_had_owner(p_baby uuid) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = nina, pg_temp AS
-$$ SELECT EXISTS (SELECT 1 FROM nina.caregiver_membership m WHERE m.baby_id = p_baby AND m.role = 'OWNER') $$;
+$$ SELECT EXISTS (SELECT 1 FROM nina.caregiver_membership m WHERE m.baby_id = p_baby AND m.role = 'OWNER')
+      AND EXISTS (SELECT 1 FROM nina.caregiver_membership me WHERE me.baby_id = p_baby AND me.user_id = nina.current_user_id()) $$;
 
 -- Criador do bebe vira Owner (RB-006): bebe da PROPRIA familia que ainda nunca teve vinculo OWNER (nem revogado).
 CREATE FUNCTION nina.can_bootstrap_owner(p_baby uuid) RETURNS boolean
