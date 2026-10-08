@@ -95,6 +95,7 @@ public sealed class ClientIpAndForgotTests(PostgresFixture postgres) : Integrati
             s.AddSingleton<IIdentityMailer>(sp => new SlowResetMailer(sp.GetRequiredService<InMemoryIdentityMailer>()));
         }));
         var client = new ApiClient(slow.CreateClient(), Factory);
+        var sentMail = slow.Services.GetRequiredService<InMemoryIdentityMailer>();
 
         async Task<double> Time(string email, int n)
         {
@@ -121,11 +122,11 @@ public sealed class ClientIpAndForgotTests(PostgresFixture postgres) : Integrati
 
         // o e-mail ainda é entregue, em segundo plano
         var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (DateTime.UtcNow < deadline && !Factory.Mailer.Sent.Any(m => m.To == registered.Email && m.Kind == MailKind.PasswordReset))
+        while (DateTime.UtcNow < deadline && !sentMail.Sent.Any(m => m.To == registered.Email && m.Kind == MailKind.PasswordReset))
         {
             await Task.Delay(100);
         }
 
-        Assert.Contains(Factory.Mailer.Sent, m => m.To == registered.Email && m.Kind == MailKind.PasswordReset);
+        Assert.Contains(sentMail.Sent, m => m.To == registered.Email && m.Kind == MailKind.PasswordReset);
     }
 }
