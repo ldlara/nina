@@ -19,13 +19,13 @@ public sealed record Problem(string Code, int Status, string Title, IReadOnlyLis
 
 public sealed record FieldConflict(string Field, string Kept);
 
-public sealed record PushWarning(string Code, IReadOnlyList<Guid>? RelatedEntityIds = null, int? SkewSeconds = null);
+public sealed record PushWarning(string Code, IReadOnlyList<Guid>? RelatedEntityIds = null, int? SkewSeconds = null, int? ToleranceSeconds = null);
 
 public sealed record MutationResult(
     Guid MutationId, string Status, string? EntityType = null, Guid? EntityId = null, long? Version = null,
     string? Resolution = null, IReadOnlyList<FieldConflict>? Conflicts = null,
     IReadOnlyList<PushWarning>? Warnings = null, JsonObject? Entity = null,
-    bool? Retryable = null, Problem? Problem = null);
+    bool? Retryable = null, Problem? Problem = null, DateTimeOffset? ServerReceivedAt = null);
 
 public sealed record PushResponse(DateTimeOffset ServerTime, IReadOnlyList<MutationResult> Results);
 
@@ -74,14 +74,24 @@ public enum PushMode
     PerMutationTransaction,
 }
 
+/// <summary>Quem "vence" quando dois dispositivos editam o mesmo campo depois do mesmo base_version.</summary>
+public enum ConflictOrder
+{
+    /// <summary>Contrato v1.0.1 (SR-014): vence a mutação que chega depois ao servidor; `client_created_at` é só informativo.</summary>
+    ServerArrival,
+    /// <summary>Proposta original do ADR-0003: vence o `client_created_at` mais novo, limitado ao instante de recebimento (nunca no futuro).</summary>
+    ClientClockClamped,
+}
+
 public sealed class SyncOptions
 {
+    public ConflictOrder ConflictOrder { get; init; } = ConflictOrder.ServerArrival;
     public int MaxBatch { get; init; } = 100;
     public int MaxPayloadBytes { get; init; } = 256 * 1024;
     public int DefaultPullLimit { get; init; } = 200;
     public int MaxPullLimit { get; init; } = 500;
     public int RetentionDays { get; init; } = 90;
-    public int ClockSkewWarnSeconds { get; init; } = 300;
+    public int ClockSkewWarnSeconds { get; init; } = 86_400;   // limits.sync_max_clock_skew_seconds (contrato v1.0.1)
     public int MaxTxRetries { get; init; } = 5;
     public PushMode Mode { get; init; } = PushMode.PerBabyTransaction;
 }

@@ -39,13 +39,17 @@ public sealed class ScenarioTests(SpikeFixture fx)
         Assert.True(st.Contiguous && st.Min == 1 && st.Max == st.Head);
         // version da entidade = sync_sequence da última mudança (INV-19): únicas por bebê
         Assert.Equal(await Env.ScalarAsync<long>("SELECT count(*) FROM nina.change_log WHERE baby_id=@b", ("b", t.Baby.BabyId)), st.Head);
+        // autoria/dispositivo gravados pelo servidor a partir do contexto da requisição
+        Assert.Equal(0, await Env.ScalarAsync<long>("SELECT count(*) FROM nina.change_log WHERE baby_id=@b AND entity_type<>'BABY' AND (device_id IS NULL OR actor_user_id IS NULL)", ("b", t.Baby.BabyId)));
+        Assert.Equal(new[] { t.A.DeviceId, t.B.DeviceId }.OrderBy(x => x),
+            (await Env.ScalarAsync<Guid[]>("SELECT array_agg(DISTINCT device_id) FROM nina.change_log WHERE baby_id=@b AND entity_type<>'BABY'", ("b", t.Baby.BabyId))).OrderBy(x => x));
     }
 
     // ---------------------------------------------------------------- 2) conflito LWW por campo + auditoria
 
-    private async Task<(Trio T, Guid S)> ConflictSetupAsync()
+    private async Task<(Trio T, Guid S)> ConflictSetupAsync(ConflictOrder order = ConflictOrder.ServerArrival)
     {
-        var t = await Trio.CreateAsync(Env);
+        var t = await Trio.CreateAsync(Env, svc: Env.NewService(new SyncOptions { ConflictOrder = order }));
         t.A.Now = () => T(1);
         var s = t.A.Create("SLEEP_SESSION", Data.Sleep(T(0), T(30), "NAP", "original", null));
         await t.SyncBothTwiceAsync();
@@ -56,10 +60,12 @@ public sealed class ScenarioTests(SpikeFixture fx)
         return (t, s);
     }
 
-    [Fact]
-    public async Task Conflict_lww_per_field_a_first_then_b_newer_edit_wins_contested_field()
+    [Theory]
+    [InlineData(ConflictOrder.ServerArrival)]
+    [InlineData(ConflictOrder.ClientClockClamped)]
+    public async Task Conflict_lww_per_field_a_first_then_b_newer_edit_wins_contested_field(ConflictOrder order)
     {
-        var (t, s) = await ConflictSetupAsync();
+        var (t, s) = await ConflictSetupAsync(order);
         await t.A.SyncAsync();
         var rb = (await t.B.SyncAsync()).Results.Single();
         Assert.Equal("APPLIED", rb.Status);
@@ -77,9 +83,9 @@ public sealed class ScenarioTests(SpikeFixture fx)
     }
 
     [Fact]
-    public async Task Conflict_lww_is_independent_of_arrival_order()
+    public async Task Conflict_with_client_clock_policy_is_independent_of_arrival_order()
     {
-        var (t, s) = await ConflictSetupAsync();
+        var (t, s) = await ConflictSetupAsync(ConflictOrder.ClientClockClamped);
         await t.B.SyncAsync();
         var ra = (await t.A.SyncAsync()).Results.Single();               // A chega depois, mas é mais velho
         Assert.Equal("LWW_SERVER_WON", ra.Resolution);
@@ -90,6 +96,23 @@ public sealed class ScenarioTests(SpikeFixture fx)
         Assert.Equal("nota de B", Data.S(fin, "notes"));               // mesmo resultado final da ordem inversa
         Assert.Equal("colo", Data.S(fin, "method_or_place"));
         Assert.Equal(T(45).UtcDateTime, DateTimeOffset.Parse(Data.S(fin, "end_at")).UtcDateTime);   // end_at de A aplicado mesmo chegando por último
+        await t.AssertConvergedAsync(t.A, t.B);
+    }
+
+    [Fact]
+    public async Task Conflict_with_server_arrival_policy_last_to_arrive_wins_even_if_edited_earlier()
+    {
+        // Contrato v1.0.1 (SR-014): A editou ANTES (T+100) mas chega DEPOIS de B (T+110) => A vence o campo em conflito.
+        var (t, s) = await ConflictSetupAsync(ConflictOrder.ServerArrival);
+        await t.B.SyncAsync();
+        var ra = (await t.A.SyncAsync()).Results.Single();
+        Assert.Equal("LWW_CLIENT_WON", ra.Resolution);                              // "a mutação recebida agora prevaleceu"
+        Assert.Equal(("notes", "CLIENT"), (ra.Conflicts![0].Field, ra.Conflicts[0].Kept));
+        Assert.NotNull(ra.ServerReceivedAt);
+        await t.SyncBothTwiceAsync();
+        var fin = t.B.Get("SLEEP_SESSION", s)!;
+        Assert.Equal("nota de A", Data.S(fin, "notes"));                           // a edição mais antiga venceu: consequência de produto aceita no contrato
+        Assert.Equal("colo", Data.S(fin, "method_or_place"));                      // campos disjuntos continuam combinados
         await t.AssertConvergedAsync(t.A, t.B);
     }
 
@@ -109,6 +132,27 @@ public sealed class ScenarioTests(SpikeFixture fx)
         await t.AssertConvergedAsync(t.A, t.B);
         Assert.Equal("x", Data.S(t.B.Get("SLEEP_SESSION", s), "notes"));
         Assert.Equal("berco", Data.S(t.A.Get("SLEEP_SESSION", s), "method_or_place"));
+    }
+
+    [Fact]
+    public async Task Field_level_merge_can_violate_a_cross_field_invariant_and_the_whole_mutation_is_rejected()
+    {
+        // Limitação documentada: LWW por CAMPO não enxerga INV-01 (end_at >= start_at). Cada edição é válida isoladamente,
+        // a combinação não é. O banco recusa (CHECK) e a edição do segundo dispositivo é perdida com VALIDATION_FAILED.
+        var t = await Trio.CreateAsync(Env);
+        var s = t.A.Create("SLEEP_SESSION", Data.Sleep(T(0), T(60)));
+        await t.SyncBothTwiceAsync();
+        t.A.Update("SLEEP_SESSION", s, FakeDevice.D(("end_at", T(30))));        // [0,30]: válido
+        t.B.Update("SLEEP_SESSION", s, FakeDevice.D(("start_at", T(45))));      // [45,60]: válido
+        await t.A.SyncAsync();
+        var rb = (await t.B.SyncAsync()).Results.Single();
+        Assert.Equal(("REJECTED", "VALIDATION_FAILED", false), (rb.Status, rb.Problem!.Code, rb.Retryable ?? true));
+        // achado: o erro vem do trigger sleep_overlap_guard (tstzrange invertido => SQLSTATE 22000) ANTES do CHECK sleep_interval_ck (23514),
+        // mesmo com a política ACCEPT_AND_WARN; o servidor mapeia ambos para VALIDATION_FAILED, mas o `field` do erro fica pouco útil.
+        Assert.Contains(Assert.Single(rb.Problem.Errors!).Code, new[] { "22000", "23514" });
+        await t.SyncBothTwiceAsync();
+        Assert.Equal(T(0).UtcDateTime, DateTimeOffset.Parse(Data.S(t.B.Get("SLEEP_SESSION", s), "start_at")).UtcDateTime);   // edição de B perdida; B converge para o estado de A
+        await t.AssertConvergedAsync(t.A, t.B);
     }
 
     [Fact]

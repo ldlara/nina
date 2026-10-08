@@ -47,7 +47,7 @@ public sealed partial class Validation
         return normalized;
     }
 
-    public string? Required(string field, string? value, int maxLength = 4096)
+    public string? Required(string field, string? value, int maxLength = 4096, int minLength = 1)
     {
         if (string.IsNullOrEmpty(value))
         {
@@ -58,6 +58,30 @@ public sealed partial class Validation
         if (value.Length > maxLength)
         {
             _errors.Add(new FieldError(field, "TOO_LONG"));
+            return null;
+        }
+
+        if (value.Length < minLength)
+        {
+            _errors.Add(new FieldError(field, "TOO_SHORT"));
+            return null;
+        }
+
+        return value;
+    }
+
+    /// <summary>Código de verificação: 6 a 12 dígitos (contrato 1.0.1).</summary>
+    public string? VerificationCode(string field, string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            _errors.Add(new FieldError(field, "REQUIRED"));
+            return null;
+        }
+
+        if (!CodeRegex().IsMatch(value))
+        {
+            _errors.Add(new FieldError(field, "INVALID_FORMAT"));
             return null;
         }
 
@@ -77,7 +101,9 @@ public sealed partial class Validation
             return null;
         }
 
-        return value;
+        // O banco exige o idioma em minúsculas (SR-021); o contrato aceita qualquer caixa.
+        var separator = value.IndexOf('-', StringComparison.Ordinal);
+        return separator < 0 ? value.ToLowerInvariant() : value[..separator].ToLowerInvariant() + value[separator..];
     }
 
     public string? Timezone(string field, string? value)
@@ -130,8 +156,11 @@ public sealed partial class Validation
     [GeneratedRegex(@"^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$")]
     private static partial Regex EmailRegex();
 
-    [GeneratedRegex("^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$")]
+    [GeneratedRegex("^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$")]
     private static partial Regex LocaleRegex();
+
+    [GeneratedRegex("^[0-9]{6,12}$")]
+    private static partial Regex CodeRegex();
 
     [GeneratedRegex("^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$")]
     private static partial Regex TimezoneRegex();

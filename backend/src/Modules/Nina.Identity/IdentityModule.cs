@@ -33,6 +33,7 @@ public static class IdentityModule
         services.TryAddSingleton<IIdentityTokenVerifier, OidcIdentityTokenVerifier>();
 
         services.TryAddSingleton<TokenService>();
+        services.TryAddScoped<IReauthVerifier, ReauthService>();
         services.TryAddScoped<SessionIssuer>();
         services.TryAddScoped<ConsentService>();
         services.TryAddScoped<AuthService>();

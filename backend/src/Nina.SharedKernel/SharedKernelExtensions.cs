@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -7,7 +8,6 @@ using Nina.SharedKernel.Data;
 using Nina.SharedKernel.Http;
 using Nina.SharedKernel.Security;
 using Npgsql;
-using System.Text.Json;
 
 namespace Nina.SharedKernel;
 
@@ -33,6 +33,7 @@ public static class SharedKernelExtensions
         {
             o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
             o.SerializerOptions.DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower;
+            o.SerializerOptions.Converters.Add(new UtcDateTimeOffsetConverter());
             o.SerializerOptions.DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never;
         });
 
@@ -49,6 +50,13 @@ public static class SharedKernelExtensions
             o.KnownProxies.Clear();
         });
 
+        // Corpo máximo de 256 KiB (limite do sync push, SEC-042) em todas as rotas da API.
+        services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(o =>
+        {
+            o.Limits.MaxRequestBodySize = 256 * 1024;
+            o.AddServerHeader = false;
+        });
+
         services.AddHostedService<MigrationHostedService>();
         return services;
     }
@@ -57,6 +65,7 @@ public static class SharedKernelExtensions
     public static IApplicationBuilder UseNinaPipeline(this IApplicationBuilder app)
     {
         app.UseForwardedHeaders();
+        app.UseMiddleware<SecurityHeadersMiddleware>();
         app.UseMiddleware<ProblemDetailsMiddleware>();
         app.UseAuthentication();
         app.UseAuthorization();

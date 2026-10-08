@@ -1,7 +1,7 @@
 namespace Nina.SharedKernel.Http;
 
 /// <summary>Erro de campo (RFC 7807 estendido, ver <c>FieldError</c> no contrato).</summary>
-public sealed record FieldError(string Field, string Code);
+public sealed record FieldError(string Field, string Code, IReadOnlyDictionary<string, object?>? Meta = null);
 
 /// <summary>Exceção de domínio/transporte convertida em <c>application/problem+json</c> pelo middleware.</summary>
 public sealed class ProblemException : Exception

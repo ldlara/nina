@@ -10,6 +10,12 @@ public sealed class IdentityOptions
 
     public int PasswordMaxLength { get; set; } = 128;
 
+    /// <summary>Dígitos do código de verificação (contrato: 6 a 12; alvo 8).</summary>
+    public int VerificationCodeDigits { get; set; } = 8;
+
+    /// <summary>Tentativas por código antes de invalidá-lo (AD-34).</summary>
+    public int VerificationCodeAttempts { get; set; } = 5;
+
     // Argon2id (OWASP: m=19 MiB, t=2, p=1).
     public int Argon2MemoryKiB { get; set; } = 19456;
 
@@ -17,7 +23,7 @@ public sealed class IdentityOptions
 
     public int Argon2Parallelism { get; set; } = 1;
 
-    public int VerificationCodeMinutes { get; set; } = 15;
+    public int VerificationCodeMinutes { get; set; } = 10;
 
     public int ResendAfterSeconds { get; set; } = 60;
 
@@ -63,7 +69,10 @@ public sealed class RateLimitSettings
 
     public int ForgotPerEmailPerHour { get; set; } = 3;
 
-    public int VerifyFailuresPerEmail { get; set; } = 5;
+    public int LoginFailuresPerDevice { get; set; } = 20;
+
+    /// <summary>Teto do bloqueio progressivo de login, em horas.</summary>
+    public int LoginMaxLockoutHours { get; set; } = 24;
 
     public int VerifyFailuresPerIp { get; set; } = 30;
 

@@ -241,9 +241,10 @@ public sealed class PagingAndClockTests(SpikeFixture fx)
     }
 
     [Fact]
-    public async Task Fast_client_clock_is_clamped_to_server_receive_time_and_warned()
+    public async Task Fast_client_clock_is_clamped_to_server_receive_time_with_client_clock_policy()
     {
-        var t = await Trio.CreateAsync(Env);
+        var svc = Env.NewService(new SyncOptions { ConflictOrder = ConflictOrder.ClientClockClamped, ClockSkewWarnSeconds = 300 });
+        var t = await Trio.CreateAsync(Env, svc: svc);
         t.A.Now = () => DateTimeOffset.UtcNow.AddMinutes(-5);
         var s = t.A.Create("SLEEP_SESSION", Data.Sleep(T(0), T(30), "NAP", "base"));
         await t.SyncBothTwiceAsync();
@@ -253,6 +254,7 @@ public sealed class PagingAndClockTests(SpikeFixture fx)
         var w = Assert.Single(ra.Warnings!);
         Assert.Equal("CLIENT_CLOCK_SKEW", w.Code);
         Assert.InRange(w.SkewSeconds!.Value, 3500, 3700);
+        Assert.Equal(300, w.ToleranceSeconds);
         Assert.Equal("APPLIED", ra.Status);                                      // aceita, só avisa
         await Task.Delay(50);
         t.B.Now = () => DateTimeOffset.UtcNow;                                   // B edita depois (hora real), com base antiga
@@ -261,5 +263,30 @@ public sealed class PagingAndClockTests(SpikeFixture fx)
         Assert.Equal("LWW_CLIENT_WON", rb.Resolution);                           // sem o clamp, o +1h de A venceria B indevidamente
         await t.SyncBothTwiceAsync();
         Assert.Equal("B depois", Data.S(t.A.Get("SLEEP_SESSION", s), "notes"));
+    }
+
+    [Fact]
+    public async Task Server_arrival_policy_ignores_client_clock_and_warns_beyond_tolerance()
+    {
+        var t = await Trio.CreateAsync(Env);                                      // padrão: ServerArrival, tolerância 86400 s
+        var s = t.A.Create("SLEEP_SESSION", Data.Sleep(T(0), T(30), "NAP", "base"));
+        await t.SyncBothTwiceAsync();
+        t.A.Now = () => DateTimeOffset.UtcNow.AddHours(1);
+        t.A.Update("SLEEP_SESSION", s, FakeDevice.D(("notes", "A +1h")));
+        var ok = (await t.A.SyncAsync()).Results.Single();
+        Assert.Null(ok.Warnings);                                                // 1 h < 24 h: sem aviso
+        t.A.Now = () => DateTimeOffset.UtcNow.AddDays(-3);                       // -3 dias (offline longo ou relógio atrasado)
+        t.A.Update("SLEEP_SESSION", s, FakeDevice.D(("method_or_place", "berço")));
+        var late = (await t.A.SyncAsync()).Results.Single();
+        var w = Assert.Single(late.Warnings!);
+        Assert.Equal(("CLIENT_CLOCK_SKEW", 86_400), (w.Code, w.ToleranceSeconds));
+        Assert.InRange(w.SkewSeconds!.Value, -3 * 86_400 - 5, -3 * 86_400 + 5);
+        Assert.Equal("APPLIED", late.Status);
+        // B edita depois com base antiga: vence por chegada, não importa o relógio de A (+1h)
+        t.B.Update("SLEEP_SESSION", s, FakeDevice.D(("notes", "B chegou depois")));
+        var rb = (await t.B.SyncAsync()).Results.Single();
+        Assert.Equal("LWW_CLIENT_WON", rb.Resolution);
+        await t.SyncBothTwiceAsync();
+        Assert.Equal("B chegou depois", Data.S(t.A.Get("SLEEP_SESSION", s), "notes"));
     }
 }

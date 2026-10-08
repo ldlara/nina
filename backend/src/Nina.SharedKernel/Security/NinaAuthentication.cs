@@ -15,30 +15,17 @@ public static class NinaAuthentication
     public static IServiceCollection AddNinaJwtAuthentication(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddOptions<JwtOptions>().Bind(configuration.GetSection(JwtOptions.SectionName));
+        services.AddOptions<SecurityOptions>().Bind(configuration.GetSection(SecurityOptions.SectionName));
         services.TryAddSingleton<SecretKeys>();
+        services.TryAddSingleton<JwtKeyring>();
 
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
         services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
-            .Configure<SecretKeys, IOptions<JwtOptions>, TimeProvider>((o, keys, jwt, time) =>
+            .Configure<JwtKeyring, IOptions<JwtOptions>, TimeProvider>((o, keyring, jwt, time) =>
             {
                 o.MapInboundClaims = false;
                 o.RequireHttpsMetadata = false;
-                o.TokenValidationParameters = new TokenValidationParameters
-                {
-                    ValidateIssuer = true,
-                    ValidIssuer = jwt.Value.Issuer,
-                    ValidateAudience = true,
-                    ValidAudience = jwt.Value.Audience,
-                    ValidateLifetime = true,
-                    RequireExpirationTime = true,
-                    RequireSignedTokens = true,
-                    ValidateIssuerSigningKey = true,
-                    IssuerSigningKey = keys.SigningKey,
-                    ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
-                    ClockSkew = TimeSpan.FromSeconds(jwt.Value.ClockSkewSeconds),
-                    LifetimeValidator = TokenLifetime.Validator(time, TimeSpan.FromSeconds(jwt.Value.ClockSkewSeconds)),
-                    NameClaimType = "sub",
-                };
+                o.TokenValidationParameters = TokenValidation.Create(jwt.Value, keyring, time, jwt.Value.Audience, TokenValidation.AccessTokenType);
                 o.Events = new JwtBearerEvents
                 {
                     OnAuthenticationFailed = ctx =>
@@ -62,7 +49,10 @@ public static class NinaAuthentication
         var principal = ctx.Principal;
         var userId = principal.GetUserId();
         var sessionId = principal.GetSessionId();
-        if (userId is null || sessionId is null)
+        // Perfil AD-31: jti obrigatório e exp - iat <= 900 s (um token "válido" de vida longa é recusado).
+        var jwtToken = ctx.SecurityToken as Microsoft.IdentityModel.JsonWebTokens.JsonWebToken;
+        if (userId is null || sessionId is null || jwtToken is null || string.IsNullOrEmpty(jwtToken.Id)
+            || jwtToken.ValidTo - jwtToken.IssuedAt > TimeSpan.FromMinutes(15))
         {
             ctx.HttpContext.Items[FailureCodeKey] = "INVALID_TOKEN";
             ctx.Fail("missing claims");

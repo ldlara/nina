@@ -2,7 +2,8 @@ using System.Collections.Concurrent;
 
 namespace Nina.SharedKernel.Security;
 
-public readonly record struct RateLimitDecision(bool Allowed, int RetryAfterSeconds);
+/// <summary><c>Count</c> = tentativas dentro da janela após esta operação (útil para escalonar bloqueios).</summary>
+public readonly record struct RateLimitDecision(bool Allowed, int RetryAfterSeconds, int Count = 0);
 
 /// <summary>Limitador de taxa por chave (SEC-040). A implementação padrão é em memória (por instância).</summary>
 public interface IRateLimiter
@@ -17,6 +18,12 @@ public interface IRateLimiter
     void Record(string key, TimeSpan window);
 
     void Reset(string key);
+
+    /// <summary>Bloqueia a chave por um tempo (backoff progressivo, SEC-041).</summary>
+    void Block(string key, TimeSpan duration);
+
+    /// <summary>Informa se a chave está bloqueada e por quantos segundos ainda.</summary>
+    RateLimitDecision CheckBlocked(string key);
 }
 
 /// <summary>
@@ -27,6 +34,7 @@ public sealed class InMemoryRateLimiter(TimeProvider time) : IRateLimiter
 {
     private const int MaxKeys = 200_000;
     private readonly ConcurrentDictionary<string, Bucket> _buckets = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, long> _blocks = new(StringComparer.Ordinal);
     private int _ops;
 
     public RateLimitDecision Consume(string key, int limit, TimeSpan window)
@@ -40,12 +48,12 @@ public sealed class InMemoryRateLimiter(TimeProvider time) : IRateLimiter
             Prune(bucket, now, window);
             if (bucket.Hits.Count >= limit)
             {
-                decision = new RateLimitDecision(false, RetryAfter(bucket, now, window));
+                decision = new RateLimitDecision(false, RetryAfter(bucket, now, window), bucket.Hits.Count);
             }
             else
             {
                 bucket.Hits.Enqueue(now);
-                decision = new RateLimitDecision(true, 0);
+                decision = new RateLimitDecision(true, 0, bucket.Hits.Count);
             }
         }
 
@@ -84,7 +92,31 @@ public sealed class InMemoryRateLimiter(TimeProvider time) : IRateLimiter
         Sweep();
     }
 
-    public void Reset(string key) => _buckets.TryRemove(key, out _);
+    public void Reset(string key)
+    {
+        _buckets.TryRemove(key, out _);
+        _blocks.TryRemove(key, out _);
+    }
+
+    public void Block(string key, TimeSpan duration) =>
+        _blocks[key] = time.GetUtcNow().UtcTicks + duration.Ticks;
+
+    public RateLimitDecision CheckBlocked(string key)
+    {
+        if (!_blocks.TryGetValue(key, out var until))
+        {
+            return new RateLimitDecision(true, 0);
+        }
+
+        var remaining = until - time.GetUtcNow().UtcTicks;
+        if (remaining <= 0)
+        {
+            _blocks.TryRemove(key, out _);
+            return new RateLimitDecision(true, 0);
+        }
+
+        return new RateLimitDecision(false, Math.Max(1, (int)Math.Ceiling(TimeSpan.FromTicks(remaining).TotalSeconds)));
+    }
 
     private static void Prune(Bucket bucket, long now, TimeSpan window)
     {

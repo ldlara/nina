@@ -32,16 +32,17 @@ public sealed class Trio
     public FakeDevice A { get; init; } = null!;
     public FakeDevice B { get; init; } = null!;
 
-    public static async Task<Trio> CreateAsync(SpikeEnv env, string roleB = "CAREGIVER")
+    public static async Task<Trio> CreateAsync(SpikeEnv env, string roleB = "CAREGIVER", SyncService? svc = null)
     {
+        svc ??= env.Service;
         var a = await env.CreateUserAsync();
         var b = await env.CreateUserAsync();
         var baby = await env.CreateBabyAsync(a, (b, roleB));
         return new Trio
         {
             Env = env, Baby = baby, UserA = a, UserB = b,
-            A = new FakeDevice("A", env.Service, a, baby.BabyId),
-            B = new FakeDevice("B", env.Service, b, baby.BabyId),
+            A = new FakeDevice("A", svc, a, baby.BabyId),
+            B = new FakeDevice("B", svc, b, baby.BabyId),
         };
     }
 

@@ -47,7 +47,7 @@ public sealed partial class AuthService(
 
         var v = new Validation();
         var email = v.Email("email", req.Email);
-        var password = v.Required("password", req.Password, 1024);
+        var password = v.Required("password", req.Password, Opt.PasswordMaxLength);
         if (req.DisplayName is { Length: > 80 })
         {
             v.Add(new FieldError("display_name", "TOO_LONG"));
@@ -68,7 +68,7 @@ public sealed partial class AuthService(
 
         // Custo de hash idêntico para e-mail novo e existente (SEC-050).
         var hash = await hasher.HashAsync(password!);
-        var code = OpaqueTokens.NewVerificationCode();
+        var code = OpaqueTokens.NewVerificationCode(Opt.VerificationCodeDigits);
         var now = time.GetUtcNow();
 
         RegisterOutcome outcome;
@@ -151,11 +151,13 @@ public sealed partial class AuthService(
     {
         var v = new Validation();
         var email = v.Email("email", req.Email);
-        var code = v.Required("code", req.Code, 16);
+        var code = v.VerificationCode("code", req.Code);
         var device = v.Device("device", req.Device);
         v.ThrowIfInvalid();
 
-        EnforcePeek($"verify:email:{email}", Limits.VerifyFailuresPerEmail);
+        // Consome antes de verificar: tentativas paralelas não furam o limite; zera no sucesso (AD-34: 5 tentativas por código).
+        var attempt = limiter.Consume($"verify:email:{email}", Opt.VerificationCodeAttempts, FailureWindow);
+        Enforce(attempt);
         EnforcePeek($"verify:ip:{Ip}", Limits.VerifyFailuresPerIp);
 
         var now = time.GetUtcNow();
@@ -170,6 +172,12 @@ public sealed partial class AuthService(
             var owner = await IdentityStore.ConsumeRecoveryAsync(tx, VerificationHash(user.Id, code!), now);
             if (owner != user.Id)
             {
+                if (attempt.Count >= Opt.VerificationCodeAttempts)
+                {
+                    // Tentativas esgotadas: o código vigente é invalidado e será preciso pedir outro (AD-34).
+                    await IdentityStore.InvalidateOpenRecoveryAsync(tx, user.Id, now);
+                }
+
                 return null;
             }
 
@@ -180,7 +188,6 @@ public sealed partial class AuthService(
 
         if (result is null)
         {
-            limiter.Record($"verify:email:{email}", FailureWindow);
             limiter.Record($"verify:ip:{Ip}", FailureWindow);
             await AuditFailureAsync("auth.email_verify_failed", null, device!.DeviceId, ct);
             throw ProblemException.Unauthorized("INVALID_VERIFICATION_CODE", "Invalid or expired code");
@@ -196,16 +203,31 @@ public sealed partial class AuthService(
     {
         var v = new Validation();
         var email = v.Email("email", req.Email);
-        var password = v.Required("password", req.Password, 1024);
+        var password = v.Required("password", req.Password, Opt.PasswordMaxLength);
         var device = v.Device("device", req.Device);
         v.ThrowIfInvalid();
 
         var accountIp = $"login:acct-ip:{email}:{Ip}";
         var account = $"login:acct:{email}";
         var ipKey = $"login:ip:{Ip}";
-        EnforcePeek(accountIp, Limits.LoginFailuresPerAccountAndIp);
+        var deviceKey = $"login:device:{device!.DeviceId:N}";
+        // Bloqueio progressivo (SEC-041): cada novo estouro dobra o tempo, até o teto; o Retry-After cresce entre bloqueios.
+        var blockKey = $"login:block:{email}:{Ip}";
+        Enforce(limiter.CheckBlocked(blockKey));
+        // Consome antes de verificar (limite por conta+IP vale para tentativas paralelas); zera no sucesso.
+        if (!limiter.Consume(accountIp, Limits.LoginFailuresPerAccountAndIp, FailureWindow).Allowed)
+        {
+            var strikes = limiter.Consume($"login:strikes:{email}:{Ip}", int.MaxValue, TimeSpan.FromHours(Limits.LoginMaxLockoutHours)).Count;
+            var lockout = TimeSpan.FromTicks(Math.Min(
+                FailureWindow.Ticks * (1L << Math.Min(strikes - 1, 10)),
+                TimeSpan.FromHours(Limits.LoginMaxLockoutHours).Ticks));
+            limiter.Block(blockKey, lockout);
+            throw ProblemException.RateLimited((int)lockout.TotalSeconds);
+        }
+
         EnforcePeek(account, Limits.LoginFailuresPerAccount);
         EnforcePeek(ipKey, Limits.LoginFailuresPerIp);
+        EnforcePeek(deviceKey, Limits.LoginFailuresPerDevice);
 
         var user = await db.InTransactionAsync(null, tx => IdentityStore.FindUserByEmailAsync(tx, email!), ct);
         var check = new PasswordCheck(false, false);
@@ -220,25 +242,37 @@ public sealed partial class AuthService(
 
         if (!check.Valid || user is null || user.EmailVerifiedAt is null)
         {
-            limiter.Record(accountIp, FailureWindow);
             limiter.Record(account, FailureWindow);
             limiter.Record(ipKey, FailureWindow);
-            await AuditFailureAsync("auth.login_failed", user?.Id, device!.DeviceId, ct);
+            limiter.Record(deviceKey, FailureWindow);
+            await AuditFailureAsync("auth.login_failed", user?.Id, device.DeviceId, ct);
             throw ProblemException.Unauthorized("INVALID_CREDENTIALS", "Invalid credentials");
         }
 
         limiter.Reset(accountIp);
+        limiter.Reset($"login:strikes:{email}:{Ip}");
+        limiter.Reset(blockKey);
         var newHash = check.NeedsRehash ? await hasher.HashAsync(password!) : null;
         var now = time.GetUtcNow();
-        return await db.InTransactionAsync(user.Id, async tx =>
+        var (response, newDevice) = await db.InTransactionAsync(user.Id, async tx =>
         {
             if (newHash is not null)
             {
                 await IdentityStore.UpsertCredentialAsync(tx, user.Id, newHash, now);
             }
 
-            return await issuer.IssueAsync(tx, user, device!, "auth.login", "PASSWORD");
+            await tx.SetUserAsync(user.Id);
+            var known = await IdentityStore.DeviceHasAnySessionAsync(tx, user.Id, device.DeviceId!.Value);
+            return (await issuer.IssueAsync(tx, user, device, "auth.login", "PASSWORD"), !known);
         }, ct);
+
+        if (newDevice)
+        {
+            // Aviso de login em dispositivo novo (SEC-041); falha de envio não derruba o login.
+            await TrySendAsync(() => mailer.SendSecurityNoticeAsync(user.Email, SecurityNotice.NewDeviceLogin, user.Locale ?? Opt.DefaultLocale, ct));
+        }
+
+        return response;
     }
 
     public async Task<TokenResponse> LoginSocialAsync(string provider, SocialLoginRequest req, CancellationToken ct)
@@ -246,8 +280,8 @@ public sealed partial class AuthService(
         Enforce(limiter.Consume($"social:ip:{Ip}", Limits.SocialPerIpPerMinute, TimeSpan.FromMinutes(1)));
 
         var v = new Validation();
-        var idToken = v.Required("id_token", req.IdToken);
-        var nonce = v.Required("nonce", req.Nonce, 256);
+        var idToken = v.Required("id_token", req.IdToken, 4096, 16);
+        var nonce = v.Required("nonce", req.Nonce, 256, 8);
         var device = v.Device("device", req.Device);
         var locale = v.Locale("locale", req.Locale);
         var timezone = v.Timezone("timezone", req.Timezone);
@@ -322,7 +356,7 @@ public sealed partial class AuthService(
     {
         Enforce(limiter.Consume($"refresh:ip:{Ip}", Limits.RefreshPerIpPerMinute, TimeSpan.FromMinutes(1)));
         var v = new Validation();
-        var token = v.Required("refresh_token", req.RefreshToken, 256);
+        var token = v.Required("refresh_token", req.RefreshToken, 512, 16);
         if (req.DeviceId is null || req.DeviceId == Guid.Empty)
         {
             v.Add(new FieldError("device_id", "REQUIRED"));
@@ -456,8 +490,8 @@ public sealed partial class AuthService(
     {
         EnforcePeek($"reset:ip:{Ip}", Limits.ResetFailuresPerIp);
         var v = new Validation();
-        var token = v.Required("token", req.Token, 256);
-        var password = v.Required("new_password", req.NewPassword, 1024);
+        var token = v.Required("token", req.Token, 512, 16);
+        var password = v.Required("new_password", req.NewPassword, Opt.PasswordMaxLength);
         v.ThrowIfInvalid();
         v.Add(await policy.ValidateAsync("new_password", password!, null, ct));
         v.ThrowIfInvalid();
@@ -502,13 +536,24 @@ public sealed partial class AuthService(
     public async Task<ReauthResponse> ReauthenticateAsync(Guid userId, Guid sessionId, ReauthRequest req, CancellationToken ct)
     {
         var key = $"reauth:user:{userId:N}";
-        EnforcePeek(key, Limits.ReauthFailuresPerUser);
+        EnforcePeek($"reauth:ip:{Ip}", Limits.ReauthFailuresPerUser * 4);
 
+        // Exatamente um entre `password` e (`provider`, `id_token`, `nonce`) (oneOf do contrato).
         var v = new Validation();
-        var usingProvider = req.Provider is not null || req.IdToken is not null;
+        var usingProvider = req.Provider is not null || req.IdToken is not null || req.Nonce is not null;
         if (req.Password is null && !usingProvider)
         {
             v.Add(new FieldError("password", "REQUIRED"));
+        }
+
+        if (req.Password is not null && usingProvider)
+        {
+            v.Add(new FieldError("password", "CONFLICTING_CREDENTIALS"));
+        }
+
+        if (req.Password is not null)
+        {
+            v.Required("password", req.Password, Opt.PasswordMaxLength);
         }
 
         if (usingProvider)
@@ -518,11 +563,15 @@ public sealed partial class AuthService(
                 v.Add(new FieldError("provider", req.Provider is null ? "REQUIRED" : "UNSUPPORTED_VALUE"));
             }
 
-            v.Required("id_token", req.IdToken);
-            v.Required("nonce", req.Nonce, 256);
+            v.Required("id_token", req.IdToken, 4096, 16);
+            v.Required("nonce", req.Nonce, 256, 8);
         }
 
+        var scopes = ValidateScopes(v, req.Scope);
         v.ThrowIfInvalid();
+
+        // Requisições inválidas não gastam tentativas; as válidas consomem antes da checagem (paralelismo não fura o limite).
+        Enforce(limiter.Consume(key, Limits.ReauthFailuresPerUser, FailureWindow));
 
         var user = await db.InTransactionAsync(userId, tx => IdentityStore.FindUserByIdAsync(tx, userId), ct);
         var ok = false;
@@ -546,15 +595,45 @@ public sealed partial class AuthService(
 
         if (!ok)
         {
-            limiter.Record(key, FailureWindow);
+            limiter.Record($"reauth:ip:{Ip}", FailureWindow);
             await AuditFailureAsync("auth.reauth_failed", userId, null, ct);
             throw ProblemException.Unauthorized("INVALID_CREDENTIALS", "Invalid credentials");
         }
 
         limiter.Reset(key);
-        await db.InTransactionAsync(userId, tx => audit.AppendAsync(tx, new AuditEntry("auth.reauthenticated", userId, "session", sessionId)), ct);
-        var (token, expiresIn) = tokens.IssueReauthToken(userId, sessionId);
-        return new ReauthResponse(token, expiresIn);
+        var (token, expiresIn, jti) = tokens.IssueReauthToken(userId, sessionId, scopes);
+        await db.InTransactionAsync(userId, tx => audit.AppendAsync(tx, new AuditEntry(
+            "auth.reauthenticated", userId, "session", sessionId,
+            Metadata: new Dictionary<string, object?> { ["jti"] = jti, ["scopes"] = scopes ?? [] })), ct);
+        return new ReauthResponse(token, expiresIn, scopes?.ToList());
+    }
+
+    private static List<string>? ValidateScopes(Validation v, List<string>? scope)
+    {
+        if (scope is null)
+        {
+            return null; // transição da v1.x: token de uso único para uma operação sensível qualquer
+        }
+
+        if (scope.Count is < 1 or > 3)
+        {
+            v.Add(new FieldError("scope", scope.Count == 0 ? "REQUIRED" : "TOO_MANY"));
+        }
+
+        for (var i = 0; i < scope.Count; i++)
+        {
+            if (!ReauthScopes.All.Contains(scope[i]))
+            {
+                v.Add(new FieldError($"scope[{i}]", "UNSUPPORTED_VALUE"));
+            }
+        }
+
+        if (scope.Distinct(StringComparer.Ordinal).Count() != scope.Count)
+        {
+            v.Add(new FieldError("scope", "DUPLICATE"));
+        }
+
+        return scope;
     }
 
     // ------------------------------------------------------------------- helpers

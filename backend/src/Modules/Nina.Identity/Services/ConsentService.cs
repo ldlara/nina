@@ -110,6 +110,11 @@ public sealed class ConsentService(NinaDb db, IOptions<IdentityOptions> options,
         var key = input.PurposeKey?.ToLowerInvariant();
         v.Required("purpose_key", input.PurposeKey, 64);
         v.Required("document_version", input.DocumentVersion, 32);
+        if (input.DocumentVersion is { Length: > 0 and <= 32 } dv && !dv.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '+' or '-'))
+        {
+            v.Add(new FieldError("document_version", "INVALID_FORMAT"));
+        }
+
         if (input.Status is not ("GRANTED" or "REVOKED"))
         {
             v.Add(new FieldError("status", input.Status is null ? "REQUIRED" : "UNSUPPORTED_VALUE"));

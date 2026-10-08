@@ -8,7 +8,7 @@ namespace Nina.Identity.Tests.Integration;
 /// <summary>ADR-0007: Google/Apple (validação do id_token atrás de interface, com fake), sem fusão automática por e-mail.</summary>
 public sealed class SocialLoginTests(PostgresFixture postgres) : IntegrationTestBase(postgres)
 {
-    private static JsonObject Body(string provider, string subject, string? email, bool verified = true, string nonce = "nonce-1", JsonArray? consents = null, string tokenNonce = "nonce-1")
+    private static JsonObject Body(string provider, string subject, string? email, bool verified = true, string nonce = "nonce-0001", JsonArray? consents = null, string tokenNonce = "nonce-0001")
     {
         var body = new JsonObject
         {
@@ -86,7 +86,10 @@ public sealed class SocialLoginTests(PostgresFixture postgres) : IntegrationTest
         var email = ApiClient.NewEmail();
         await Api.PostAsync("/v1/auth/register", new JsonObject
         {
-            ["email"] = email, ["password"] = TestConstants.GoodPassword, ["locale"] = "pt-BR", ["consents"] = ApiClient.Consents(),
+            ["email"] = email,
+            ["password"] = TestConstants.GoodPassword,
+            ["locale"] = "pt-BR",
+            ["consents"] = ApiClient.Consents(),
         });
 
         var response = await Api.PostAsync("/v1/auth/apple", Body("APPLE", "sub-x", email, consents: ApiClient.Consents()));
@@ -97,8 +100,8 @@ public sealed class SocialLoginTests(PostgresFixture postgres) : IntegrationTest
     [Fact]
     public async Task Invalid_token_wrong_nonce_unverified_email_and_missing_email_are_401()
     {
-        var invalid = await Api.PostAsync("/v1/auth/google", new JsonObject { ["id_token"] = "garbage", ["nonce"] = "n", ["device"] = ApiClient.Device() });
-        var nonce = await Api.PostAsync("/v1/auth/google", Body("GOOGLE", "s", ApiClient.NewEmail(), nonce: "sent", tokenNonce: "other", consents: ApiClient.Consents()));
+        var invalid = await Api.PostAsync("/v1/auth/google", new JsonObject { ["id_token"] = "garbage-token-0123456789", ["nonce"] = "nonce-0001", ["device"] = ApiClient.Device() });
+        var nonce = await Api.PostAsync("/v1/auth/google", Body("GOOGLE", "s", ApiClient.NewEmail(), nonce: "sent-nonce-1", tokenNonce: "other-nonce-2", consents: ApiClient.Consents()));
         var unverified = await Api.PostAsync("/v1/auth/google", Body("GOOGLE", "s2", ApiClient.NewEmail(), verified: false, consents: ApiClient.Consents()));
         var noEmail = await Api.PostAsync("/v1/auth/apple", Body("APPLE", "s3", null, consents: ApiClient.Consents()));
         var wrongProvider = await Api.PostAsync("/v1/auth/apple", Body("GOOGLE", "s4", ApiClient.NewEmail(), consents: ApiClient.Consents()));
@@ -118,7 +121,7 @@ public sealed class SocialLoginTests(PostgresFixture postgres) : IntegrationTest
         ApiResponse? last = null;
         for (var i = 0; i < 40; i++)
         {
-            last = await Api.PostAsync("/v1/auth/google", new JsonObject { ["id_token"] = "garbage", ["nonce"] = "n", ["device"] = ApiClient.Device() }, tweak: r => r.Headers.Add("X-Forwarded-For", "192.0.2.50"));
+            last = await Api.PostAsync("/v1/auth/google", new JsonObject { ["id_token"] = "garbage-token-0123456789", ["nonce"] = "nonce-0001", ["device"] = ApiClient.Device() }, tweak: r => r.Headers.Add("X-Forwarded-For", "192.0.2.50"));
         }
 
         Assert.Equal(HttpStatusCode.TooManyRequests, last!.Status);
@@ -128,13 +131,13 @@ public sealed class SocialLoginTests(PostgresFixture postgres) : IntegrationTest
     public async Task Link_identity_requires_reauth_and_then_the_provider_login_reaches_the_same_account()
     {
         var s = await Api.RegisterAndVerifyAsync();
-        var link = new JsonObject { ["provider"] = "GOOGLE", ["id_token"] = FakeIdentityTokenVerifier.Token("GOOGLE", "sub-link", s.Email, true, "n9"), ["nonce"] = "n9" };
+        var link = new JsonObject { ["provider"] = "GOOGLE", ["id_token"] = FakeIdentityTokenVerifier.Token("GOOGLE", "sub-link", s.Email, true, "nonce-link-9"), ["nonce"] = "nonce-link-9" };
 
         var denied = await Api.SendAsync(HttpMethod.Post, "/v1/me/identities", link, s.AccessToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, denied.Status);
         Assert.Equal("REAUTH_REQUIRED", denied.Code);
 
-        var reauth = await Api.PostAsync("/v1/auth/reauthenticate", new JsonObject { ["password"] = s.Password }, s.AccessToken);
-        var token = reauth.Json!["reauth_token"]!.GetValue<string>();
+        var token = await Api.ReauthAsync(s, "IDENTITY_LINK");
         var linked = await Api.SendAsync(HttpMethod.Post, "/v1/me/identities", link, s.AccessToken, r => r.Headers.Add("X-Reauth-Token", token));
         Assert.Equal(HttpStatusCode.OK, linked.Status);
         Assert.Equal("GOOGLE", linked.Json!["identities"]![0]!["provider"]!.GetValue<string>());
@@ -143,7 +146,11 @@ public sealed class SocialLoginTests(PostgresFixture postgres) : IntegrationTest
         Assert.Equal(HttpStatusCode.OK, login.Status);
         Assert.Equal(s.UserId.ToString(), login.Json!["user"]!["id"]!.GetValue<string>());
 
-        var again = await Api.SendAsync(HttpMethod.Post, "/v1/me/identities", link, s.AccessToken, r => r.Headers.Add("X-Reauth-Token", token));
+        var reused = await Api.SendAsync(HttpMethod.Post, "/v1/me/identities", link, s.AccessToken, r => r.Headers.Add("X-Reauth-Token", token));
+        Assert.Equal("REAUTH_REQUIRED", reused.Code); // uso único
+
+        var token2 = await Api.ReauthAsync(s, "IDENTITY_LINK");
+        var again = await Api.SendAsync(HttpMethod.Post, "/v1/me/identities", link, s.AccessToken, r => r.Headers.Add("X-Reauth-Token", token2));
         Assert.Equal(HttpStatusCode.Conflict, again.Status);
         Assert.Equal("IDENTITY_ALREADY_LINKED", again.Code);
     }
@@ -154,11 +161,11 @@ public sealed class SocialLoginTests(PostgresFixture postgres) : IntegrationTest
         var owner = await Api.PostAsync("/v1/auth/google", Body("GOOGLE", "sub-owned", ApiClient.NewEmail(), consents: ApiClient.Consents()));
         Assert.Equal(HttpStatusCode.OK, owner.Status);
         var s = await Api.RegisterAndVerifyAsync();
-        var reauth = (await Api.PostAsync("/v1/auth/reauthenticate", new JsonObject { ["password"] = s.Password }, s.AccessToken)).Json!["reauth_token"]!.GetValue<string>();
+        var reauth = await Api.ReauthAsync(s, "IDENTITY_LINK");
 
         var response = await Api.SendAsync(
             HttpMethod.Post, "/v1/me/identities",
-            new JsonObject { ["provider"] = "GOOGLE", ["id_token"] = FakeIdentityTokenVerifier.Token("GOOGLE", "sub-owned", "x@example.org", true, "n"), ["nonce"] = "n" },
+            new JsonObject { ["provider"] = "GOOGLE", ["id_token"] = FakeIdentityTokenVerifier.Token("GOOGLE", "sub-owned", "x@example.org", true, "nonce-0001"), ["nonce"] = "nonce-0001" },
             s.AccessToken, r => r.Headers.Add("X-Reauth-Token", reauth));
 
         Assert.Equal("IDENTITY_IN_USE", response.Code);
@@ -170,8 +177,8 @@ public sealed class SocialLoginTests(PostgresFixture postgres) : IntegrationTest
         var created = await Api.PostAsync("/v1/auth/apple", Body("APPLE", "sub-re", ApiClient.NewEmail(), consents: ApiClient.Consents()));
         var access = created.Json!["access_token"]!.GetValue<string>();
 
-        var ok = await Api.PostAsync("/v1/auth/reauthenticate", new JsonObject { ["provider"] = "APPLE", ["id_token"] = FakeIdentityTokenVerifier.Token("APPLE", "sub-re", null, true, "r1"), ["nonce"] = "r1" }, access);
-        var foreign = await Api.PostAsync("/v1/auth/reauthenticate", new JsonObject { ["provider"] = "APPLE", ["id_token"] = FakeIdentityTokenVerifier.Token("APPLE", "someone-else", null, true, "r2"), ["nonce"] = "r2" }, access);
+        var ok = await Api.PostAsync("/v1/auth/reauthenticate", new JsonObject { ["provider"] = "APPLE", ["id_token"] = FakeIdentityTokenVerifier.Token("APPLE", "sub-re", null, true, "reauth-001"), ["nonce"] = "reauth-001" }, access);
+        var foreign = await Api.PostAsync("/v1/auth/reauthenticate", new JsonObject { ["provider"] = "APPLE", ["id_token"] = FakeIdentityTokenVerifier.Token("APPLE", "someone-else", null, true, "reauth-002"), ["nonce"] = "reauth-002" }, access);
 
         Assert.Equal(HttpStatusCode.OK, ok.Status);
         Assert.Equal(HttpStatusCode.Unauthorized, foreign.Status);

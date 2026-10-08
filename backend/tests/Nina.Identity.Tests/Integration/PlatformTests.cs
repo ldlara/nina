@@ -92,6 +92,17 @@ public sealed class PlatformTests(PostgresFixture postgres) : IntegrationTestBas
     }
 
     [Fact]
+    public async Task Instants_are_serialized_in_utc_with_z_suffix()
+    {
+        var s = await Api.RegisterAndVerifyAsync();
+        var me = await Api.GetAsync("/v1/me", s.AccessToken);
+        var sessions = await Api.GetAsync("/v1/me/sessions", s.AccessToken);
+
+        Assert.Matches(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$", me.Json!["created_at"]!.GetValue<string>());
+        Assert.Matches(@"Z$", sessions.Json!["items"]![0]!["last_seen_at"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Audit_events_are_append_only_for_the_application_role()
     {
         await Api.RegisterAndVerifyAsync();
@@ -143,7 +154,9 @@ public sealed class PlatformTests(PostgresFixture postgres) : IntegrationTestBas
 
         var response = await client.PostAsync("/v1/auth/login", new JsonObject
         {
-            ["email"] = "someone@example.org", ["password"] = "irrelevant-password", ["device"] = ApiClient.Device(),
+            ["email"] = "someone@example.org",
+            ["password"] = "irrelevant-password",
+            ["device"] = ApiClient.Device(),
         });
 
         Assert.Equal(HttpStatusCode.InternalServerError, response.Status);

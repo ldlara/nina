@@ -103,12 +103,14 @@ public sealed class OpaqueTokensTests
     }
 
     [Fact]
-    public void Verification_codes_have_six_digits_and_do_not_repeat_constantly()
+    public void Verification_codes_have_eight_digits_by_default_and_do_not_repeat_constantly()
     {
         var codes = Enumerable.Range(0, 200).Select(_ => OpaqueTokens.NewVerificationCode()).ToList();
 
-        Assert.All(codes, c => Assert.Matches("^[0-9]{6}$", c));
-        Assert.True(codes.Distinct().Count() > 150);
+        Assert.All(codes, c => Assert.Matches("^[0-9]{8}$", c));
+        Assert.True(codes.Distinct().Count() > 190);
+        Assert.Matches("^[0-9]{6}$", OpaqueTokens.NewVerificationCode(6));
+        Assert.Matches("^[0-9]{9}$", OpaqueTokens.NewVerificationCode(50)); // limitado ao máximo suportado
     }
 
     [Fact]
@@ -129,15 +131,16 @@ public sealed class PasswordPolicyTests
         new(Options.Create(new IdentityOptions { PasswordMinLength = min }), new LocalCommonPasswordChecker());
 
     [Theory]
-    [InlineData("short", "PASSWORD_TOO_SHORT")]
-    [InlineData("password123", "PASSWORD_TOO_COMMON")]
-    [InlineData("zzzzzzzzzzzz", "PASSWORD_TOO_COMMON")]
-    public async Task Rejects_weak_passwords(string password, string code)
+    [InlineData("short", "TOO_SHORT")]
+    [InlineData("password123", "TOO_COMMON")]
+    [InlineData("zzzzzzzzzzzz", "TOO_COMMON")]
+    public async Task Rejects_weak_passwords_with_PASSWORD_POLICY_and_a_reason(string password, string reason)
     {
         var error = await Policy().ValidateAsync("password", password, null, CancellationToken.None);
 
-        Assert.Equal(code, error!.Code);
+        Assert.Equal("PASSWORD_POLICY", error!.Code);
         Assert.Equal("password", error.Field);
+        Assert.Equal(reason, error.Meta!["reason"]);
     }
 
     [Fact]
@@ -146,8 +149,9 @@ public sealed class PasswordPolicyTests
         var sameAsEmail = await Policy().ValidateAsync("password", "someone.long@example.org", "someone.long@example.org", CancellationToken.None);
         var tooLong = await Policy().ValidateAsync("password", new string('a', 1) + new string('b', 200), null, CancellationToken.None);
 
-        Assert.Equal("PASSWORD_TOO_COMMON", sameAsEmail!.Code);
-        Assert.Equal("PASSWORD_TOO_LONG", tooLong!.Code);
+        Assert.Equal("TOO_COMMON", sameAsEmail!.Meta!["reason"]);
+        Assert.Equal("TOO_LONG", tooLong!.Meta!["reason"]);
+        Assert.Equal(128, tooLong.Meta["limit"]);
     }
 
     [Theory]

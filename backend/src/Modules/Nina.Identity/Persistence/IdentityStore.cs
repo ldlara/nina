@@ -132,6 +132,18 @@ public static class IdentityStore
             """,
             Db.Bytes("h", hash), Db.Timestamp("now", now));
 
+    /// <summary>
+    /// Registra um segredo de uso único (hash) no livro-razão <c>recovery_request</c> já marcado como usado; false se já existia.
+    /// A unicidade de <c>token_hash</c> torna a operação atômica entre instâncias (usado para o <c>jti</c> de reautenticação).
+    /// </summary>
+    public static async Task<bool> TryConsumeOneTimeAsync(DbTx tx, Guid userId, byte[] hash, DateTimeOffset now, DateTimeOffset expires) =>
+        await tx.ExecAsync(
+            """
+            INSERT INTO nina.recovery_request (user_id, token_hash, created_at, expires_at, used_at)
+            VALUES (@u, @h, @now, @exp, @now) ON CONFLICT (token_hash) DO NOTHING
+            """,
+            Db.Uuid("u", userId), Db.Bytes("h", hash), Db.Timestamp("now", now), Db.Timestamp("exp", expires)) == 1;
+
     public static Task InvalidateOpenRecoveryAsync(DbTx tx, Guid userId, DateTimeOffset now) =>
         tx.ExecAsync(
             "UPDATE nina.recovery_request SET used_at = @now WHERE user_id = @u AND used_at IS NULL",
@@ -146,6 +158,11 @@ public static class IdentityStore
              WHERE user_id = @u AND device_id = @d AND revoked_at IS NULL
             """,
             Db.Uuid("u", userId), Db.Uuid("d", deviceId), Db.Timestamp("now", now));
+
+    public static async Task<bool> DeviceHasAnySessionAsync(DbTx tx, Guid userId, Guid deviceId) =>
+        await tx.ScalarAsync<bool>(
+            "SELECT EXISTS (SELECT 1 FROM nina.auth_session WHERE user_id = @u AND device_id = @d)",
+            Db.Uuid("u", userId), Db.Uuid("d", deviceId));
 
     public static Task InsertSessionAsync(
         DbTx tx, Guid id, Guid userId, Guid deviceId, string? label, string platform, string? appVersion, DateTimeOffset now, DateTimeOffset absoluteExpires) =>

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Nina.Identity.Mail;
 
@@ -7,6 +9,7 @@ public enum SecurityNotice
     PasswordChanged,
     PasswordReset,
     IdentityLinked,
+    NewDeviceLogin,
 }
 
 public enum MailKind
@@ -34,9 +37,10 @@ public sealed record SentMail(string To, MailKind Kind, string? Secret, Security
 
 /// <summary>
 /// Implementação fake: guarda as mensagens em memória (limite de 1000) e não envia nada. É o padrão até existir provedor real;
-/// o campo <c>Secret</c> existe só para testes e ambiente de desenvolvimento.
+/// o campo <c>Secret</c> existe só para testes e desenvolvimento. Só em Development o código/token é escrito no log,
+/// para permitir o fluxo de cadastro sem provedor de e-mail; fora dele nenhum segredo vai ao log.
 /// </summary>
-public sealed class InMemoryIdentityMailer(TimeProvider time) : IIdentityMailer
+public sealed partial class InMemoryIdentityMailer(TimeProvider time, IHostEnvironment environment, ILogger<InMemoryIdentityMailer> logger) : IIdentityMailer
 {
     private const int Capacity = 1000;
     private readonly ConcurrentQueue<SentMail> _sent = new();
@@ -58,10 +62,18 @@ public sealed class InMemoryIdentityMailer(TimeProvider time) : IIdentityMailer
     private Task Add(SentMail mail)
     {
         _sent.Enqueue(mail);
+        if (environment.IsDevelopment())
+        {
+            LogDevMail(logger, mail.Kind, mail.Secret ?? "-");
+        }
+
         while (_sent.Count > Capacity && _sent.TryDequeue(out _))
         {
         }
 
         return Task.CompletedTask;
     }
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "[DEV FAKE MAIL] {Kind} secret={Secret}")]
+    private static partial void LogDevMail(ILogger logger, MailKind kind, string secret);
 }

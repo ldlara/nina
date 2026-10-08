@@ -15,8 +15,15 @@ namespace Nina.Identity.Tests.Infrastructure;
 
 public static class TestConstants
 {
-    public const string SigningKey = "dGVzdC1zaWduaW5nLWtleS1mb3ItbmluYS1pZGVudGl0eS10ZXN0cy0xMjM0NTY="; // base64, > 32 bytes
+    public const string MasterKey = "dGVzdC1tYXN0ZXIta2V5LWZvci1uaW5hLWlkZW50aXR5LXRlc3RzLTEyMzQ1Ng=="; // base64, > 32 bytes
     public const string GoodPassword = "correct-horse-battery-staple";
+
+    /// <summary>Gera uma chave ECDSA P-256 (PKCS#8, PEM) para assinar JWT ES256 nos testes.</summary>
+    public static string NewSigningKeyPem()
+    {
+        using var key = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+        return key.ExportPkcs8PrivateKeyPem();
+    }
 }
 
 /// <summary>Host in-process da API contra um PostgreSQL real, com relógio, e-mail e provedores externos fakes.</summary>
@@ -33,7 +40,9 @@ public sealed class ApiFactory(string appConnectionString, Action<Dictionary<str
         var settings = new Dictionary<string, string?>
         {
             ["ConnectionStrings:Default"] = appConnectionString,
-            ["Jwt:SigningKey"] = TestConstants.SigningKey,
+            ["Jwt:SigningKeyPem"] = TestConstants.NewSigningKeyPem(),
+            ["Jwt:KeyId"] = "test-key-1",
+            ["Security:MasterKey"] = TestConstants.MasterKey,
             ["Identity:Argon2MemoryKiB"] = "4096", // acelera os testes; o padrão de produção é 19456
             ["Identity:Argon2Iterations"] = "2",
             ["Identity:GoogleClientIds:0"] = "test-google-client",
@@ -141,6 +150,20 @@ public sealed class ApiClient(HttpClient http, ApiFactory factory)
         var login = await PostAsync("/v1/auth/login", new JsonObject { ["email"] = email, ["password"] = password, ["device"] = device });
         Assert.Equal(System.Net.HttpStatusCode.OK, login.Status);
         return Session.From(login.Json!, Guid.Parse(device["device_id"]!.GetValue<string>()), email) with { Password = password };
+    }
+
+    /// <summary>Obtém um X-Reauth-Token (uso único) por senha para os escopos pedidos.</summary>
+    public async Task<string> ReauthAsync(Session s, params string[] scopes)
+    {
+        var body = new JsonObject { ["password"] = s.Password };
+        if (scopes.Length > 0)
+        {
+            body["scope"] = new JsonArray(scopes.Select(x => (JsonNode)JsonValue.Create(x)!).ToArray());
+        }
+
+        var response = await PostAsync("/v1/auth/reauthenticate", body, s.AccessToken);
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.Status);
+        return response.Json!["reauth_token"]!.GetValue<string>();
     }
 
     public string LastCode(string email) =>

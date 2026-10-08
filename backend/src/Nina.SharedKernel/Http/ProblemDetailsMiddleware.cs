@@ -43,6 +43,19 @@ public sealed partial class ProblemDetailsMiddleware(RequestDelegate next, ILogg
             // CHECK/domínio do schema (ex.: fuso IANA desconhecido, formato de locale) que a validação da aplicação não cobriu.
             await ProblemWriter.WriteAsync(context, ProblemException.Validation(new FieldError(ex.ConstraintName ?? "body", "INVALID_VALUE")));
         }
+        catch (PostgresException ex) when (!context.Response.HasStarted)
+        {
+            // Mapeia por SQLSTATE sem repassar o texto do banco (UUIDs/detalhes de negócio não vazam, SEC-053).
+            LogUnhandled(logger, "PostgresException:" + ex.SqlState, requestId);
+            await ProblemWriter.WriteAsync(context, ex.SqlState switch
+            {
+                PostgresErrorCodes.UniqueViolation => ProblemException.Conflict("CONFLICT", "Conflict"),
+                PostgresErrorCodes.InsufficientPrivilege => ProblemException.Forbidden("FORBIDDEN", "Forbidden"),
+                _ when ex.SqlState?.StartsWith("NN", StringComparison.Ordinal) == true =>
+                    ProblemException.Conflict("BUSINESS_RULE_VIOLATION", "Business rule violation"),
+                _ => new ProblemException(StatusCodes.Status500InternalServerError, "INTERNAL_ERROR", "Internal error"),
+            });
+        }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
         {
             // Cliente desistiu; nada a escrever.

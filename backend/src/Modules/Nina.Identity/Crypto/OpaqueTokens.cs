@@ -54,9 +54,13 @@ public static class OpaqueTokens
     /// <summary>Token de uso único de 256 bits para links de recuperação.</summary>
     public static string NewUrlToken() => Base64Url(RandomNumberGenerator.GetBytes(32));
 
-    /// <summary>Código numérico de 6 dígitos (verificação de e-mail).</summary>
-    public static string NewVerificationCode() =>
-        RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6", System.Globalization.CultureInfo.InvariantCulture);
+    /// <summary>Código numérico de uso único (verificação de e-mail); 6 a 12 dígitos, alvo 8 (contrato 1.0.1).</summary>
+    public static string NewVerificationCode(int digits = 8)
+    {
+        digits = Math.Clamp(digits, 6, 9);
+        var max = (int)Math.Pow(10, digits);
+        return RandomNumberGenerator.GetInt32(0, max).ToString("D" + digits, System.Globalization.CultureInfo.InvariantCulture);
+    }
 
     public static string Base64Url(byte[] bytes) =>
         Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');

@@ -32,12 +32,12 @@ public sealed class PasswordPolicy(IOptions<IdentityOptions> options, IBreachedP
         var o = options.Value;
         if (password.Length < o.PasswordMinLength)
         {
-            return new FieldError(field, "PASSWORD_TOO_SHORT");
+            return Policy(field, "TOO_SHORT", o.PasswordMinLength);
         }
 
         if (password.Length > o.PasswordMaxLength)
         {
-            return new FieldError(field, "PASSWORD_TOO_LONG");
+            return Policy(field, "TOO_LONG", o.PasswordMaxLength);
         }
 
         if (email is not null)
@@ -46,12 +46,23 @@ public sealed class PasswordPolicy(IOptions<IdentityOptions> options, IBreachedP
             if (string.Equals(password, email, StringComparison.OrdinalIgnoreCase)
                 || (local.Length >= 4 && string.Equals(password, local, StringComparison.OrdinalIgnoreCase)))
             {
-                return new FieldError(field, "PASSWORD_TOO_COMMON");
+                return Policy(field, "TOO_COMMON", null);
             }
         }
 
         return await breached.IsBreachedAsync(password, cancellationToken)
-            ? new FieldError(field, "PASSWORD_TOO_COMMON")
+            ? Policy(field, "TOO_COMMON", null)
             : null;
+    }
+
+    private static FieldError Policy(string field, string reason, int? limit)
+    {
+        var meta = new Dictionary<string, object?> { ["reason"] = reason };
+        if (limit is { } value)
+        {
+            meta["limit"] = value;
+        }
+
+        return new FieldError(field, "PASSWORD_POLICY", meta);
     }
 }

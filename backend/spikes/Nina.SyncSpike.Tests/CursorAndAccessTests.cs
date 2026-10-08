@@ -279,4 +279,46 @@ public sealed class AccessTests(SpikeFixture fx)
         var unk = await One(M("DIAPER_EVENT", new Dictionary<string, object?> { ["occurred_at"] = T(1), ["tz"] = "UTC", ["diaper_type"] = "WET", ["cor"] = "azul" }));
         Assert.Equal("VALIDATION_FAILED", unk.Problem!.Code);
     }
+
+    [Fact]
+    public async Task Cross_baby_and_cross_tenant_identifiers_never_leak_or_collide()
+    {
+        var u = await Env.CreateUserAsync();
+        var b1 = await Env.CreateBabyAsync(u);
+        var b2 = await Env.CreateBabyAsync(u);                                // mesmo usuário em dois bebês
+        var dev = Guid.NewGuid(); var auth = new AuthContext(u, dev);
+        Mutation Mk(string op, string type, Guid id, Guid baby, object? data, long bv = 1) =>
+            new(Guid.NewGuid(), op, type, id, baby, op == "CREATE" ? 0 : bv, Data.T0, data == null ? null : Json.ToElement(data));
+        async Task<MutationResult> One(Mutation m, AuthContext? a = null) => (await Env.Service.PushAsync(a ?? auth, new PushRequest((a ?? auth).DeviceId, [m]))).Results.Single();
+
+        var d = Guid.NewGuid();
+        Assert.Equal("APPLIED", (await One(new Mutation(Guid.NewGuid(), "CREATE", "DIAPER_EVENT", d, b1.BabyId, 0, Data.T0, Data.Diaper(T(1))))).Status);
+        // UPDATE/DELETE com entity_id de OUTRO bebê (que o usuário até lê): ENTITY_NOT_FOUND, indistinguível de inexistente
+        var upd = await One(Mk("UPDATE", "DIAPER_EVENT", d, b2.BabyId, new Dictionary<string, object?> { ["diaper_type"] = "DRY" }));
+        var del = await One(Mk("DELETE", "DIAPER_EVENT", d, b2.BabyId, null));
+        var ghost = await One(Mk("UPDATE", "DIAPER_EVENT", Guid.NewGuid(), b2.BabyId, new Dictionary<string, object?> { ["diaper_type"] = "DRY" }));
+        Assert.All(new[] { upd, del, ghost }, r => Assert.Equal(("REJECTED", "ENTITY_NOT_FOUND", false), (r.Status, r.Problem!.Code, r.Retryable ?? true)));
+        Assert.Equal(upd.Problem!.Status, ghost.Problem!.Status);
+        // WAKE_EVENT apontando para sessão de outro bebê
+        var s1 = Guid.NewGuid();
+        await One(new Mutation(Guid.NewGuid(), "CREATE", "SLEEP_SESSION", s1, b1.BabyId, 0, Data.T0, Data.Sleep(T(0), T(60), "NIGHT")));
+        var wk = await One(Mk("CREATE", "WAKE_EVENT", Guid.NewGuid(), b2.BabyId, new Dictionary<string, object?> { ["sleep_session_id"] = s1, ["started_at"] = T(10), ["ended_at"] = T(20) }));
+        Assert.Equal("ENTITY_NOT_FOUND", wk.Problem!.Code);
+        // CREATE com entity_id já usado em outro bebê (visível) ou por outro tenant (invisível): ENTITY_ID_UNAVAILABLE
+        var dup = await One(new Mutation(Guid.NewGuid(), "CREATE", "DIAPER_EVENT", d, b2.BabyId, 0, Data.T0, Data.Diaper(T(2))));
+        Assert.Equal("ENTITY_ID_UNAVAILABLE", dup.Problem!.Code);
+        var mallory = await Env.CreateUserAsync(); var mb = await Env.CreateBabyAsync(mallory);
+        var mauth = new AuthContext(mallory, Guid.NewGuid());
+        var steal = await One(new Mutation(Guid.NewGuid(), "CREATE", "DIAPER_EVENT", d, mb.BabyId, 0, Data.T0, Data.Diaper(T(3))), mauth);
+        Assert.Equal(("REJECTED", "ENTITY_ID_UNAVAILABLE", false), (steal.Status, steal.Problem!.Code, steal.Retryable ?? true));
+        Assert.Equal(0, await Env.ScalarAsync<long>("SELECT count(*) FROM nina.diaper_event WHERE baby_id=@b", ("b", mb.BabyId)));
+
+        // mutation_id de outro tenant: a PK global de sync_mutation colide com linha invisível (RLS). O spike detecta e recusa
+        // (sem isso o efeito seria aplicado SEM registro e o reenvio duplicaria). Recomendação: PK (baby_id, mutation_id).
+        var shared = Guid.NewGuid();
+        await One(new Mutation(shared, "CREATE", "DIAPER_EVENT", Guid.NewGuid(), b1.BabyId, 0, Data.T0, Data.Diaper(T(4))));
+        var colliding = await One(new Mutation(shared, "CREATE", "DIAPER_EVENT", Guid.NewGuid(), mb.BabyId, 0, Data.T0, Data.Diaper(T(5))), mauth);
+        Assert.Equal(("REJECTED", "MUTATION_ID_REUSE"), (colliding.Status, colliding.Problem!.Code));
+        Assert.Equal(0, await Env.ScalarAsync<long>("SELECT count(*) FROM nina.diaper_event WHERE baby_id=@b", ("b", mb.BabyId)));
+    }
 }

@@ -100,6 +100,7 @@ public sealed partial class SyncService(NpgsqlDataSource appDataSource, CursorCo
         "ACCESS_REVOKED" => (403, "Access revoked"),
         "BABY_NOT_FOUND" => (404, "Baby not found"),
         "MUTATION_ID_REUSE" => (422, "mutation_id reused with a different mutation"),
+        "ENTITY_ID_UNAVAILABLE" => (409, "entity_id already used"),
         _ => (503, "Transient failure"),
     };
 
@@ -118,6 +119,7 @@ public sealed partial class SyncService(NpgsqlDataSource appDataSource, CursorCo
         "NN001" => Invalid("id", "IMMUTABLE"),
         "42501" => new RejectException("FORBIDDEN_ROLE"),
         "23503" => new RejectException("ENTITY_NOT_FOUND"),
+        "23505" when e.ConstraintName?.EndsWith("_pkey", StringComparison.Ordinal) == true => new RejectException("ENTITY_ID_UNAVAILABLE"),   // id de OUTRO bebê (invisível pela RLS)
         var s when s.StartsWith("23", StringComparison.Ordinal) || s.StartsWith("22", StringComparison.Ordinal) =>
             Invalid(e.ConstraintName ?? e.ColumnName ?? "data", e.SqlState),
         _ => throw e,
@@ -193,7 +195,7 @@ public sealed partial class SyncService(NpgsqlDataSource appDataSource, CursorCo
         if (denied != null)
         {
             await tx.RollbackAsync(ct);
-            return ms.Select(m => Rejected(m, denied, null, false)).ToArray();
+            return ms.Select(m => Rejected(m, denied, null, false) with { ServerReceivedAt = env.Now }).ToArray();
         }
 
         var results = new MutationResult[ms.Count];
@@ -213,7 +215,7 @@ public sealed partial class SyncService(NpgsqlDataSource appDataSource, CursorCo
                 var a = await ApplyAsync(env, m, ct);
                 if (!a.IsDuplicate) await RecordAsync(env, m, a.SyncOutcome, a.ResultVersion, null, ct);
                 await ExecAsync(env, "RELEASE SAVEPOINT m", ct);
-                return a.Result;
+                return a.Result with { ServerReceivedAt = env.Now };
             }
             catch (RejectException r)
             {
@@ -232,7 +234,7 @@ public sealed partial class SyncService(NpgsqlDataSource appDataSource, CursorCo
             await ExecAsync(env, "ROLLBACK TO SAVEPOINT m", ct);
             if (!rj.Retryable && rj.Record && m.Op is "CREATE" or "UPDATE" or "DELETE")
                 await RecordAsync(env, m, rj.SyncOutcome, null, rj.Code, ct);
-            return Rejected(m, rj.Code, rj.Errors, rj.Retryable);
+            return Rejected(m, rj.Code, rj.Errors, rj.Retryable) with { ServerReceivedAt = env.Now };
         }
     }
 
@@ -248,7 +250,16 @@ public sealed partial class SyncService(NpgsqlDataSource appDataSource, CursorCo
         P(c, "op", m.Op, NpgsqlDbType.Text); P(c, "bv", m.BaseVersion, NpgsqlDbType.Bigint);
         P(c, "cc", m.ClientCreatedAt.UtcDateTime, NpgsqlDbType.TimestampTz); P(c, "o", outcome, NpgsqlDbType.Text);
         P(c, "rv", resultVersion, NpgsqlDbType.Bigint); P(c, "rc", rejectCode, NpgsqlDbType.Text);
-        await c.ExecuteNonQueryAsync(ct);
+        // 0 linhas = o mutation_id já existe em linha INVISÍVEL para este usuário (RLS): a PK de sync_mutation é global.
+        // Sem esta checagem a mutação seria aplicada sem registro (reenvio duplicaria o efeito).
+        if (await c.ExecuteNonQueryAsync(ct) == 0 && !await ExistsVisibleAsync(env, m.MutationId, ct)) throw new RejectException("MUTATION_ID_REUSE", record: false);
+    }
+
+    private static async Task<bool> ExistsVisibleAsync(Env env, Guid mutationId, CancellationToken ct)
+    {
+        await using var c = Cmd(env, "SELECT 1 FROM nina.sync_mutation WHERE mutation_id = @id");
+        P(c, "id", mutationId, NpgsqlDbType.Uuid);
+        return await c.ExecuteScalarAsync(ct) != null;
     }
 
     private sealed record Applied(MutationResult Result, string SyncOutcome, long? ResultVersion, bool IsDuplicate = false);
@@ -264,10 +275,12 @@ public sealed partial class SyncService(NpgsqlDataSource appDataSource, CursorCo
         var dup = await LockAndFindAsync(env, m, ct);
         if (dup != null) return await DuplicateAsync(env, m, spec, dup, ct);
 
-        var t = m.ClientCreatedAt < env.Now ? m.ClientCreatedAt : env.Now;   // nunca no futuro (LWW)
+        // ordem de resolução: chegada ao servidor (contrato v1.0.1) ou client_created_at limitado ao recebimento (ADR-0003 original)
+        var t = _opt.ConflictOrder == ConflictOrder.ServerArrival || m.ClientCreatedAt > env.Now ? env.Now : m.ClientCreatedAt;
         var warnings = new List<PushWarning>();
         var skew = (int)(m.ClientCreatedAt - env.Now).TotalSeconds;
-        if (skew > _opt.ClockSkewWarnSeconds) warnings.Add(new PushWarning("CLIENT_CLOCK_SKEW", SkewSeconds: skew));
+        if (Math.Abs(skew) > _opt.ClockSkewWarnSeconds)
+            warnings.Add(new PushWarning("CLIENT_CLOCK_SKEW", SkewSeconds: skew, ToleranceSeconds: _opt.ClockSkewWarnSeconds));
 
         return m.Op switch
         {
@@ -402,7 +415,7 @@ public sealed partial class SyncService(NpgsqlDataSource appDataSource, CursorCo
         if (cur != null)
         {
             if (cur["deleted_at"] is not null) throw Deleted();
-            throw Invalid("id", "ALREADY_EXISTS");
+            throw new RejectException("ENTITY_ID_UNAVAILABLE");
         }
         if (m.BaseVersion != 0) throw Invalid("base_version", "MUST_BE_ZERO");
         var fields = ParseData(spec, m.Data, create: true);
@@ -538,7 +551,8 @@ public sealed partial class SyncService(NpgsqlDataSource appDataSource, CursorCo
         {
             if (clocks.TryGetValue(f.Name, out var clk) && clk.Version > m.BaseVersion && clk.Device != env.Ctx.DeviceId)
             {
-                var clientWins = t > clk.Ts || (t == clk.Ts && env.Ctx.DeviceId.CompareTo(clk.Device) > 0);
+                var clientWins = _opt.ConflictOrder == ConflictOrder.ServerArrival   // quem chega depois vence (o último a commitar)
+                                 || t > clk.Ts || (t == clk.Ts && env.Ctx.DeviceId.CompareTo(clk.Device) > 0);
                 conflicts.Add(new FieldConflict(f.Name, clientWins ? "CLIENT" : "SERVER"));
                 if (clientWins) winners.Add(f);
             }

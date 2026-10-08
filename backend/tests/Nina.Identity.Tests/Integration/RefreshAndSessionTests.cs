@@ -63,7 +63,7 @@ public sealed class RefreshAndSessionTests(PostgresFixture postgres) : Integrati
     {
         var s = await Api.RegisterAndVerifyAsync();
 
-        var garbage = await Refresh("rt_garbage", s.DeviceId);
+        var garbage = await Refresh("rt_garbage-token-0123456789", s.DeviceId);
         var wrongDevice = await Refresh(s.RefreshToken, Guid.NewGuid());
 
         Assert.Equal("INVALID_REFRESH_TOKEN", garbage.Code);

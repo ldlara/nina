@@ -79,10 +79,11 @@ public static class IdentityEndpoints
             [FromHeader(Name = ReauthHeader)] string? reauth,
             ClaimsPrincipal user,
             AccountService s,
+            IReauthVerifier reauthVerifier,
             CancellationToken ct) =>
         {
             var (userId, sessionId) = (user.RequireUserId(), user.RequireSessionId());
-            await s.RequireReauthAsync(reauth, userId, sessionId);
+            await reauthVerifier.RequireAsync(user, reauth, ReauthScopes.AccountPasswordChange, ct);
             await s.ChangePasswordAsync(userId, sessionId, body, ct);
             return Results.NoContent();
         });
@@ -92,11 +93,11 @@ public static class IdentityEndpoints
             [FromHeader(Name = ReauthHeader)] string? reauth,
             ClaimsPrincipal user,
             AccountService s,
+            IReauthVerifier reauthVerifier,
             CancellationToken ct) =>
         {
-            var (userId, sessionId) = (user.RequireUserId(), user.RequireSessionId());
-            await s.RequireReauthAsync(reauth, userId, sessionId);
-            return TypedResults.Json(await s.LinkIdentityAsync(userId, body, ct));
+            await reauthVerifier.RequireAsync(user, reauth, ReauthScopes.IdentityLink, ct);
+            return TypedResults.Json(await s.LinkIdentityAsync(user.RequireUserId(), body, ct));
         });
 
         me.MapGet("/sessions", async (ClaimsPrincipal user, AccountService s, CancellationToken ct) =>

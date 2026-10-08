@@ -18,22 +18,12 @@ public sealed class AccountService(
     IOptions<IdentityOptions> options,
     PasswordHasher hasher,
     PasswordPolicy policy,
-    TokenService tokens,
     AuthService auth,
     IIdentityMailer mailer,
     AuditLog audit,
     TimeProvider time)
 {
     private IdentityOptions Opt => options.Value;
-
-    /// <summary>Exige <c>X-Reauth-Token</c> válido, do mesmo usuário e sessão (SEC-014).</summary>
-    public async Task RequireReauthAsync(string? header, Guid userId, Guid sessionId)
-    {
-        if (!await tokens.ValidateReauthAsync(header, userId, sessionId))
-        {
-            throw ProblemException.Forbidden("REAUTH_REQUIRED", "Reauthentication required");
-        }
-    }
 
     public async Task<UserDto> GetMeAsync(Guid userId, CancellationToken ct) =>
         await db.InTransactionAsync(userId, async tx =>
@@ -66,7 +56,7 @@ public sealed class AccountService(
     public async Task ChangePasswordAsync(Guid userId, Guid sessionId, ChangePasswordRequest req, CancellationToken ct)
     {
         var v = new Validation();
-        var password = v.Required("new_password", req.NewPassword, 1024);
+        var password = v.Required("new_password", req.NewPassword, Opt.PasswordMaxLength);
         v.ThrowIfInvalid();
 
         var email = await db.InTransactionAsync(userId, async tx => (await IdentityStore.FindUserByIdAsync(tx, userId))?.Email, ct);
@@ -95,8 +85,8 @@ public sealed class AccountService(
             v.Add(new FieldError("provider", req.Provider is null ? "REQUIRED" : "UNSUPPORTED_VALUE"));
         }
 
-        var idToken = v.Required("id_token", req.IdToken);
-        var nonce = v.Required("nonce", req.Nonce, 256);
+        var idToken = v.Required("id_token", req.IdToken, 4096, 16);
+        var nonce = v.Required("nonce", req.Nonce, 256, 8);
         v.ThrowIfInvalid();
 
         var identity = await auth.VerifyExternalAsync(req.Provider!, idToken!, nonce!, null, ct);
@@ -189,6 +179,11 @@ public sealed class AccountService(
         }
 
         v.Locale("locale", req.Locale);
+        if (req.AppVersion is { Length: > 32 })
+        {
+            v.Add(new FieldError("app_version", "TOO_LONG"));
+        }
+
         v.ThrowIfInvalid();
 
         var now = time.GetUtcNow();

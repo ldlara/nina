@@ -25,7 +25,16 @@ public static class ProblemWriter
 
         if (problem.Errors.Count > 0)
         {
-            body["errors"] = problem.Errors.Select(e => new Dictionary<string, string> { ["field"] = e.Field, ["code"] = e.Code }).ToList();
+            body["errors"] = problem.Errors.Select(e =>
+            {
+                var item = new Dictionary<string, object?> { ["field"] = e.Field, ["code"] = e.Code };
+                if (e.Meta is not null)
+                {
+                    item["meta"] = e.Meta;
+                }
+
+                return item;
+            }).ToList();
         }
 
         if (problem.RetryAfterSeconds is { } retry)
@@ -54,5 +63,6 @@ public static class NinaJson
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower,
+        Converters = { new UtcDateTimeOffsetConverter() },
     };
 }

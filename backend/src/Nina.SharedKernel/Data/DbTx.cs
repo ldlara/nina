@@ -18,11 +18,12 @@ public sealed class DbTx
 
     public CancellationToken CancellationToken { get; }
 
-    /// <summary>Define <c>nina.user_id</c> para o resto da transação (RLS). Sem isso nenhuma linha por usuário é visível.</summary>
+    /// <summary>Define <c>nina.user_id</c> (<c>SET LOCAL</c> via <c>set_config</c>) para o resto da transação (RLS). Sem isso nenhuma linha por usuário é visível.</summary>
     public async Task SetUserAsync(Guid userId)
     {
-        // SET LOCAL não aceita parâmetros; o GUID é formatado pelo runtime (somente hex e hífens), sem risco de injeção.
-        await ExecAsync($"SET LOCAL nina.user_id = '{userId:D}'");
+        // Equivalente a SET LOCAL (is_local = true) e parametrizado (SR-008): vale só até o fim da transação e nada é
+        // concatenado em SQL. Nunca usar SET de sessão: o contexto vazaria entre requisições no pool.
+        await ExecAsync("SELECT set_config('nina.user_id', @id, true)", Db.Text("id", userId.ToString("D")));
     }
 
     public async Task<int> ExecAsync(string sql, params NpgsqlParameter[] parameters)

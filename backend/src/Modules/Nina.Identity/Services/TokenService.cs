@@ -6,81 +6,87 @@ using Nina.SharedKernel.Security;
 
 namespace Nina.Identity.Services;
 
-/// <summary>Emite o access token (JWT HS256, ≤ 15 min) e o token de reautenticação (JWT de 5 min, outra audiência).</summary>
-public sealed class TokenService(SecretKeys keys, IOptions<JwtOptions> jwt, TimeProvider time)
-{
-    private const string ReauthPurpose = "reauth";
+/// <summary>Claims aceitas de um token de reautenticação (já com assinatura, <c>typ</c>, <c>aud</c>, vigência, <c>sub</c> e <c>sid</c> conferidos).</summary>
+public sealed record ReauthClaims(string Jti, IReadOnlyList<string> Scopes, DateTimeOffset ExpiresAt);
 
+/// <summary>
+/// Emite o access token (JWT ES256, <c>typ=at+jwt</c>, <c>kid</c>, ≤ 15 min) e o token de reautenticação
+/// (<c>typ=reauth+jwt</c>, <c>aud=nina-reauth</c>, escopo, <c>jti</c>, ≤ 300 s), conforme o perfil do contrato v1.0.1.
+/// </summary>
+public sealed class TokenService(JwtKeyring keyring, IOptions<JwtOptions> jwt, TimeProvider time)
+{
     public (string Token, int ExpiresIn) IssueAccessToken(Guid userId, Guid sessionId, Guid deviceId)
     {
-        var lifetime = TimeSpan.FromMinutes(Math.Min(jwt.Value.AccessTokenMinutes, 15));
+        var lifetime = TimeSpan.FromMinutes(Math.Clamp(jwt.Value.AccessTokenMinutes, 1, 15));
         var claims = new List<Claim>
         {
             new("sub", userId.ToString("D")),
             new(ClaimsExtensions.SessionClaim, sessionId.ToString("D")),
             new(ClaimsExtensions.DeviceClaim, deviceId.ToString("D")),
         };
-        return (Create(jwt.Value.Audience, claims, lifetime), (int)lifetime.TotalSeconds);
+        return (Create(jwt.Value.Audience, TokenValidation.AccessTokenType, claims, lifetime), (int)lifetime.TotalSeconds);
     }
 
-    public (string Token, int ExpiresIn) IssueReauthToken(Guid userId, Guid sessionId)
+    /// <summary>Sem escopos (transição da v1.x) o token vale para UMA operação sensível qualquer; com escopos, só para eles.</summary>
+    public (string Token, int ExpiresIn, string Jti) IssueReauthToken(Guid userId, Guid sessionId, IReadOnlyCollection<string>? scopes)
     {
-        var lifetime = TimeSpan.FromSeconds(jwt.Value.ReauthTokenSeconds);
+        var lifetime = TimeSpan.FromSeconds(Math.Clamp(jwt.Value.ReauthTokenSeconds, 1, 300));
+        var jti = Guid.NewGuid().ToString("N");
         var claims = new List<Claim>
         {
             new("sub", userId.ToString("D")),
             new(ClaimsExtensions.SessionClaim, sessionId.ToString("D")),
-            new("purpose", ReauthPurpose),
         };
-        return (Create(jwt.Value.ReauthAudience, claims, lifetime), (int)lifetime.TotalSeconds);
+        if (scopes is { Count: > 0 })
+        {
+            claims.Add(new Claim("scope", string.Join(' ', scopes)));
+        }
+
+        return (Create(jwt.Value.ReauthAudience, TokenValidation.ReauthTokenType, claims, lifetime, jti), (int)lifetime.TotalSeconds, jti);
     }
 
-    /// <summary>O token de reautenticação vale só para o mesmo usuário e a mesma sessão que o obteve.</summary>
-    public async Task<bool> ValidateReauthAsync(string? token, Guid userId, Guid sessionId)
+    /// <summary>Valida o token de reautenticação para o usuário e a sessão correntes; null se inválido por qualquer motivo.</summary>
+    public async Task<ReauthClaims?> ParseReauthAsync(string? token, Guid userId, Guid sessionId)
     {
-        if (string.IsNullOrWhiteSpace(token) || token.Length > 2048)
+        if (string.IsNullOrWhiteSpace(token) || token.Length is < 16 or > 4096)
         {
-            return false;
+            return null;
         }
 
-        var parameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidIssuer = jwt.Value.Issuer,
-            ValidateAudience = true,
-            ValidAudience = jwt.Value.ReauthAudience,
-            ValidateLifetime = true,
-            RequireExpirationTime = true,
-            RequireSignedTokens = true,
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = keys.SigningKey,
-            ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
-            LifetimeValidator = TokenLifetime.Validator(time, TimeSpan.FromSeconds(jwt.Value.ClockSkewSeconds)),
-        };
+        var parameters = TokenValidation.Create(jwt.Value, keyring, time, jwt.Value.ReauthAudience, TokenValidation.ReauthTokenType);
         var result = await new JsonWebTokenHandler().ValidateTokenAsync(token, parameters);
-        if (!result.IsValid || result.SecurityToken is not JsonWebToken parsed)
+        if (!result.IsValid || result.SecurityToken is not JsonWebToken parsed || string.IsNullOrEmpty(parsed.Id))
         {
-            return false;
+            return null;
         }
 
-        return parsed.TryGetPayloadValue<string>("purpose", out var purpose) && purpose == ReauthPurpose
-               && parsed.Subject == userId.ToString("D")
-               && parsed.TryGetPayloadValue<string>(ClaimsExtensions.SessionClaim, out var sid) && sid == sessionId.ToString("D");
+        if (parsed.Subject != userId.ToString("D")
+            || !parsed.TryGetPayloadValue<string>(ClaimsExtensions.SessionClaim, out var sid) || sid != sessionId.ToString("D")
+            || parsed.ValidTo - parsed.IssuedAt > TimeSpan.FromSeconds(300))
+        {
+            return null;
+        }
+
+        IReadOnlyList<string> scopes = parsed.TryGetPayloadValue<string>("scope", out var raw) && !string.IsNullOrWhiteSpace(raw)
+            ? raw.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            : [];
+        return new ReauthClaims(parsed.Id, scopes, new DateTimeOffset(parsed.ValidTo, TimeSpan.Zero));
     }
 
-    private string Create(string audience, List<Claim> claims, TimeSpan lifetime)
+    private string Create(string audience, string type, List<Claim> claims, TimeSpan lifetime, string? jti = null)
     {
         var now = time.GetUtcNow().UtcDateTime;
-        claims.Add(new Claim("jti", Guid.NewGuid().ToString("N")));
+        claims.Add(new Claim("jti", jti ?? Guid.NewGuid().ToString("N")));
         var descriptor = new SecurityTokenDescriptor
         {
             Issuer = jwt.Value.Issuer,
             Audience = audience,
+            TokenType = type,
             Subject = new ClaimsIdentity(claims),
             IssuedAt = now,
             NotBefore = now,
             Expires = now + lifetime,
-            SigningCredentials = new SigningCredentials(keys.SigningKey, SecurityAlgorithms.HmacSha256),
+            SigningCredentials = new SigningCredentials(keyring.SigningKey, SecurityAlgorithms.EcdsaSha256),
         };
         return new JsonWebTokenHandler { SetDefaultTimesOnTokenCreation = false }.CreateToken(descriptor);
     }

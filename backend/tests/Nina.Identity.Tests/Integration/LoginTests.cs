@@ -86,7 +86,8 @@ public sealed class LoginTests(PostgresFixture postgres) : IntegrationTestBase(p
     {
         var response = await Api.PostAsync("/v1/auth/login", new JsonObject
         {
-            ["email"] = "x@example.org", ["password"] = "irrelevant-password",
+            ["email"] = "x@example.org",
+            ["password"] = "irrelevant-password",
             ["device"] = new JsonObject { ["device_id"] = Guid.NewGuid().ToString(), ["platform"] = "SYMBIAN" },
         });
 
