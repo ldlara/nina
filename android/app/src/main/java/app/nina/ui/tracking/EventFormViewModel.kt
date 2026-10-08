@@ -186,9 +186,11 @@ class EventFormViewModel(
     fun setNotes(v: String) = change { it.copy(notes = v) }
     fun setVolume(ml: Int?) = change { it.copy(volumeMl = ml) }
 
-    /** Stepper de volume (±10 ml); parte do último valor. */
-    fun adjustVolume(delta: Int, max: Int = limits.bottleVolumeMlMax) =
-        change { s -> s.copy(volumeMl = ((s.volumeMl ?: 0) + delta).coerceIn(if (delta < 0) 0 else 1, max)) }
+    /** Stepper de volume (±10 ml). Abaixo de 1 ml: campo opcional volta a "sem volume"; obrigatório fica em 1. */
+    fun adjustVolume(delta: Int, max: Int = limits.bottleVolumeMlMax, optional: Boolean = false) = change { s ->
+        val next = (s.volumeMl ?: 0) + delta
+        s.copy(volumeMl = if (next <= 0) (if (optional) null else 1) else next.coerceAtMost(max))
+    }
 
     /** Atalhos "-5, -10, -15, -30": o horário principal passa a ser "agora" menos N minutos. */
     fun setMinutesAgo(minutes: Int) = change { s ->

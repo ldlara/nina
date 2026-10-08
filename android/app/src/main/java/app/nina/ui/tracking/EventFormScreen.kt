@@ -366,8 +366,8 @@ private fun VolumeBlock(state: EventFormState, vm: EventFormViewModel, max: Int,
             valueText = ml?.let { stringResource(R.string.volume_ml, it) } ?: "—",
             valueDescription = ml?.let { stringResource(R.string.volume_stepper_label, it) } ?: stringResource(R.string.field_volume),
             steps = listOf(
-                Triple("−10", stringResource(R.string.volume_decrease), { vm.adjustVolume(-10, max).also { if (optional && (state.volumeMl ?: 0) <= 10) vm.setVolume(null) } }),
-                Triple("+10", stringResource(R.string.volume_increase), { vm.adjustVolume(10, max) }),
+                Triple("−10", stringResource(R.string.volume_decrease), { vm.adjustVolume(-10, max, optional) }),
+                Triple("+10", stringResource(R.string.volume_increase), { vm.adjustVolume(10, max, optional) }),
             ),
         )
         // Entrada numérica alternativa ao stepper (acessibilidade e precisão).
