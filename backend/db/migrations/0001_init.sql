@@ -47,6 +47,22 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN
     RAISE NOTICE 'sem privilegio para revogar TEMP de PUBLIC no banco %', current_database();
   END;
+  -- NR-04: limites de tempo POR PAPEL (um cliente lento ou malicioso nao segura locks, transacoes nem conexoes indefinidamente).
+  -- ALTER ROLE ... SET vale para sessoes que entram COMO esse papel; a infraestrutura que cria logins membros dos papeis
+  -- nina_* deve repetir os mesmos valores no login (ver nina.apply_role_limits e infra/docker/initdb/10-bootstrap.sh).
+  BEGIN
+    ALTER ROLE nina_app          SET statement_timeout = '15s';
+    ALTER ROLE nina_app          SET lock_timeout = '5s';
+    ALTER ROLE nina_app          SET idle_in_transaction_session_timeout = '30s';
+    ALTER ROLE nina_worker       SET statement_timeout = '10min';
+    ALTER ROLE nina_worker       SET lock_timeout = '30s';
+    ALTER ROLE nina_worker       SET idle_in_transaction_session_timeout = '60s';
+    ALTER ROLE nina_config_admin SET statement_timeout = '30s';
+    ALTER ROLE nina_config_admin SET lock_timeout = '5s';
+    ALTER ROLE nina_config_admin SET idle_in_transaction_session_timeout = '30s';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE WARNING 'sem privilegio para definir timeouts por papel (NR-04): aplique statement_timeout/lock_timeout/idle_in_transaction_session_timeout na infraestrutura';
+  END;
 END $$;
 
 GRANT USAGE ON SCHEMA nina TO nina_app, nina_worker, nina_config_admin;
@@ -142,6 +158,83 @@ BEGIN
   END CASE;
   RETURN true;
 END $$;
+
+-- Copia os timeouts do papel de grupo (nina_app/nina_worker/nina_config_admin) para um LOGIN membro dele (NR-04). Sem GRANT: so o
+-- dono/migrator chama (bootstrap de infraestrutura).
+CREATE FUNCTION nina.apply_role_limits(p_login name, p_group name) RETURNS void
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
+DECLARE s text;
+BEGIN
+  IF p_group NOT IN ('nina_app', 'nina_worker', 'nina_config_admin') THEN
+    RAISE EXCEPTION 'papel de grupo invalido' USING ERRCODE = 'NN070';
+  END IF;
+  FOR s IN SELECT unnest(rs.setconfig) FROM pg_db_role_setting rs JOIN pg_roles r ON r.oid = rs.setrole
+            WHERE r.rolname = p_group AND rs.setdatabase = 0 LOOP
+    EXECUTE format('ALTER ROLE %I SET %s = %L', p_login, split_part(s, '=', 1), substr(s, position('=' IN s) + 1));
+  END LOOP;
+END $$;
+
+-- HMAC-SHA256 (RFC 2104) em SQL puro: o banco nao usa extensoes (pgcrypto).
+CREATE FUNCTION nina.hmac_sha256(p_key bytea, p_msg bytea) RETURNS bytea
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+DECLARE k bytea := p_key; ipad bytea; opad bytea; i integer;
+BEGIN
+  IF octet_length(k) > 64 THEN k := sha256(k); END IF;
+  k := k || decode(repeat('00', 64 - octet_length(k)), 'hex');
+  ipad := k; opad := k;
+  FOR i IN 0..63 LOOP
+    ipad := set_byte(ipad, i, get_byte(k, i) # 54);    -- 0x36
+    opad := set_byte(opad, i, get_byte(k, i) # 92);    -- 0x5c
+  END LOOP;
+  RETURN sha256(opad || sha256(ipad || p_msg));
+END $$;
+
+-- Chave de ASSINATURA servidor -> banco (NR-03/NR-09). Fatos que so a API pode atestar (a senha foi conferida e o reauth emitido; o
+-- codigo foi gerado e enviado ao e-mail; o provedor social atestou o e-mail) entram no banco acompanhados de um HMAC desta chave.
+-- Quem executa SQL arbitrario como nina_app NAO tem a chave (ela vive so na configuracao da API e nesta tabela, que nenhum papel de
+-- aplicacao le), logo nao consegue forjar jti de reautenticacao, codigo de e-mail nem verificacao social.
+-- Provisionada pelo dono/migrator com nina.provision_server_key(); ate la as funcoes assinadas FALHAM (fechado).
+CREATE TABLE nina.server_key (
+  id             smallint PRIMARY KEY CHECK (id = 1),
+  key            bytea NOT NULL CHECK (octet_length(key) >= 32),
+  provisioned_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE FUNCTION nina.provision_server_key(p_key bytea) RETURNS void
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
+BEGIN
+  IF p_key IS NULL OR octet_length(p_key) < 32 THEN
+    RAISE EXCEPTION 'a chave servidor-banco deve ter ao menos 32 bytes' USING ERRCODE = 'NN070';
+  END IF;
+  INSERT INTO nina.server_key (id, key) VALUES (1, p_key)
+  ON CONFLICT (id) DO UPDATE SET key = EXCLUDED.key, provisioned_at = now();
+END $$;
+
+-- Confere o MAC de uma mensagem canonica `purpose|message`. Interno (sem GRANT): so as funcoes definer o usam.
+CREATE FUNCTION nina.mac_ok(p_purpose text, p_message text, p_mac bytea) RETURNS boolean
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
+DECLARE v_key bytea;
+BEGIN
+  SELECT k.key INTO v_key FROM nina.server_key k WHERE k.id = 1;
+  IF v_key IS NULL THEN
+    RAISE EXCEPTION 'SERVER_KEY_NOT_PROVISIONED: chave de assinatura servidor-banco ausente (nina.provision_server_key)' USING ERRCODE = 'NN070';
+  END IF;
+  IF p_mac IS NULL OR octet_length(p_mac) <> 32 THEN RETURN false; END IF;
+  RETURN nina.hmac_sha256(v_key, convert_to(p_purpose || '|' || p_message, 'UTF8')) = p_mac;
+END $$;
+
+-- Locks de CONTROLE (NR-04): a serializacao da cadeia de auditoria e das purgas usa o bloqueio de LINHA desta tabela privada, nao
+-- advisory locks com chave deterministica (qualquer papel poderia segurar `pg_advisory_lock(hashtextextended('nina.audit_chain', 0))`).
+-- Nenhum papel de aplicacao tem privilegio na tabela; so as funcoes definer travam as linhas.
+CREATE TABLE nina.control_lock (name text PRIMARY KEY);
+INSERT INTO nina.control_lock VALUES ('audit_chain'), ('purge_sync'), ('purge_operational'), ('purge_audit'), ('purge_consent');
+
+-- A sessao pertence a um login de aplicacao (membro de nina_app, nao superusuario)? Os gatilhos BEFORE INSERT que rodam como dono usam
+-- isto para negar PRIMEIRO, com o mesmo erro da RLS, o que a politica negaria depois (NR-05).
+CREATE FUNCTION nina.is_app_session() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = nina, pg_temp AS
+$$ SELECT pg_has_role(session_user, 'nina_app', 'MEMBER')
+      AND NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = session_user AND (r.rolsuper OR r.rolbypassrls)) $$;
 
 -- -----------------------------------------------------------------------------
 -- 1. Configuração editável (ADR-0005): planos, flags, parâmetros
@@ -327,23 +420,34 @@ CREATE TABLE nina.email_change_request (
 );
 CREATE UNIQUE INDEX email_change_open_uq ON nina.email_change_request (user_id) WHERE confirmed_at IS NULL AND invalidated_at IS NULL;
 
--- Livro-razao de jti de reautenticacao (SR-013/SR-016): uso unico atomico entre instancias, escopo e vinculo ao recurso
--- (exclusao de conta, transferencia, requisicao de privacidade). `attempts` conta apresentacoes (>1 = replay).
+-- Livro-razao de reautenticacao (SR-013/SR-016/NR-03). Duas fases, ambas no banco:
+--   EMISSAO  (nina.reauth_issue): so a API emite, e a linha so nasce com um MAC valido (nina.server_key) sobre
+--            usuario|sessao|jti|escopos|emissao|expiracao. Um jti inventado por quem executa SQL arbitrario nao existe aqui.
+--   CONSUMO  (nina.consume_reauth_jti): so um jti EMITIDO para este usuario e esta sessao, ainda nao consumido, dentro do escopo.
+--            Depois, reauth_bind vincula o jti consumido a um recurso (uso unico real).
+-- `scopes` vazio = token de transicao v1.x (vale uma operacao sensivel qualquer, uma vez). `attempts` conta apresentacoes.
 CREATE TABLE nina.reauth_jti (
   jti_hash          bytea PRIMARY KEY CHECK (octet_length(jti_hash) = 32),
   user_id           uuid NOT NULL REFERENCES nina.app_user(id) ON DELETE CASCADE,
-  session_id        uuid,
-  scope             text NOT NULL CHECK (scope IN ('ACCOUNT_PASSWORD_CHANGE', 'ACCOUNT_EMAIL_CHANGE', 'IDENTITY_LINK', 'IDENTITY_UNLINK',
+  session_id        uuid NOT NULL,
+  scopes            text[] NOT NULL DEFAULT '{}' CHECK (cardinality(scopes) <= 3
+                      AND scopes <@ ARRAY['ACCOUNT_PASSWORD_CHANGE', 'ACCOUNT_EMAIL_CHANGE', 'IDENTITY_LINK', 'IDENTITY_UNLINK',
+                                          'DATA_EXPORT_REQUEST', 'DATA_EXPORT_DOWNLOAD', 'ACCOUNT_DELETE', 'PRIVACY_REQUEST',
+                                          'BABY_DELETE', 'OWNERSHIP_TRANSFER']),
+  issued_at         timestamptz NOT NULL,                          -- relogio da API (coberto pelo MAC)
+  expires_at        timestamptz NOT NULL,
+  consumed_at       timestamptz,
+  consumed_scope    text CHECK (consumed_scope IN ('ACCOUNT_PASSWORD_CHANGE', 'ACCOUNT_EMAIL_CHANGE', 'IDENTITY_LINK', 'IDENTITY_UNLINK',
                                                    'DATA_EXPORT_REQUEST', 'DATA_EXPORT_DOWNLOAD', 'ACCOUNT_DELETE', 'PRIVACY_REQUEST',
                                                    'BABY_DELETE', 'OWNERSHIP_TRANSFER')),
-  consumed_at       timestamptz NOT NULL DEFAULT now(),
-  expires_at        timestamptz NOT NULL,
-  attempts          smallint NOT NULL DEFAULT 1,
+  attempts          smallint NOT NULL DEFAULT 0,
   bound_entity_type text CHECK (bound_entity_type IN ('ACCOUNT_DELETION_REQUEST', 'PRIVACY_REQUEST', 'BABY', 'EMAIL_CHANGE_REQUEST')),
   bound_entity_id   uuid,
-  CONSTRAINT reauth_bound_ck CHECK ((bound_entity_type IS NULL) = (bound_entity_id IS NULL))
+  CONSTRAINT reauth_lifetime_ck CHECK (expires_at > issued_at AND expires_at <= issued_at + interval '5 minutes'),
+  CONSTRAINT reauth_consumed_ck CHECK ((consumed_at IS NULL) = (consumed_scope IS NULL)),
+  CONSTRAINT reauth_bound_ck CHECK ((bound_entity_type IS NULL) = (bound_entity_id IS NULL) AND (bound_entity_id IS NULL OR consumed_at IS NOT NULL))
 );
-CREATE INDEX reauth_jti_user_ix ON nina.reauth_jti (user_id, consumed_at DESC);
+CREATE INDEX reauth_jti_user_ix ON nina.reauth_jti (user_id, issued_at DESC);
 CREATE INDEX reauth_jti_expiry_ix ON nina.reauth_jti (expires_at);
 
 CREATE TABLE nina.device_push_token (
