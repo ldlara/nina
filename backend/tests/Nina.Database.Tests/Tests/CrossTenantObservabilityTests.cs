@@ -70,15 +70,15 @@ public sealed class CrossTenantObservabilityTests(PgCluster cluster) : DbTestBas
     public async Task NR05_a_foreign_insert_neither_waits_for_nor_consumes_the_victims_sync_counter()
     {
         // Bob esta no meio de uma escrita (segura o lock de linha do contador do bebe dele)
+        var before = await OwnerScalarAsync<long>($"SELECT last_sequence FROM nina.baby_sync_head WHERE baby_id = '{W.BabyB}'");
         await using var bob = await AsApp(W.Bob);
         await bob.ExecAsync(Sleep(W.BabyB, "now() - interval '9 hours'", "now() - interval '8 hours'"));
-        var before = await OwnerScalarAsync<long>($"SELECT last_sequence FROM nina.baby_sync_head WHERE baby_id = '{W.BabyB}'");
 
         var clock = Stopwatch.StartNew();
         Assert.Equal("42501", await FailsAsync(Role.App, W.Dave, Sleep(W.BabyB, "now() - interval '7 hours'", "now() - interval '6 hours'")));
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(2), $"o INSERT alheio esperou o lock do bebe do Bob ({clock.Elapsed}): oraculo de tempo/lock");
         await bob.CommitAsync();
-        Assert.Equal(before, await OwnerScalarAsync<long>($"SELECT last_sequence FROM nina.baby_sync_head WHERE baby_id = '{W.BabyB}'"));
+        Assert.Equal(before + 1, await OwnerScalarAsync<long>($"SELECT last_sequence FROM nina.baby_sync_head WHERE baby_id = '{W.BabyB}'"));      // so a escrita do proprio Bob
     }
 
     [Fact]
