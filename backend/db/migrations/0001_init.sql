@@ -2845,41 +2845,48 @@ DECLARE v_user uuid := nina.current_user_id(); r nina.email_change_request%ROWTY
 BEGIN
   IF v_user IS NULL THEN RAISE EXCEPTION 'confirmacao exige usuario no contexto' USING ERRCODE = 'NN015'; END IF;
   SELECT * INTO r FROM nina.email_change_request e
-   WHERE e.user_id = v_user AND e.confirmed_at IS NULL AND e.invalidated_at IS NULL AND e.expires_at > p_now FOR UPDATE;
+   WHERE e.user_id = v_user AND e.confirmed_at IS NULL AND e.invalidated_at IS NULL AND e.expires_at > v_now FOR UPDATE;
   IF NOT FOUND THEN RETURN 'INVALID'; END IF;
   IF r.code_hash <> p_code_hash THEN
     UPDATE nina.email_change_request SET attempts = attempts + 1,
-           invalidated_at = CASE WHEN attempts + 1 >= max_attempts THEN p_now END WHERE id = r.id;
+           invalidated_at = CASE WHEN attempts + 1 >= max_attempts THEN v_now END WHERE id = r.id;
     RETURN 'INVALID';
   END IF;
   BEGIN
-    UPDATE nina.app_user SET email = r.new_email, email_verified_at = p_now WHERE id = v_user;
+    UPDATE nina.app_user SET email = r.new_email, email_verified_at = v_now WHERE id = v_user;
   EXCEPTION WHEN unique_violation THEN
     RETURN 'EMAIL_IN_USE';
   END;
-  UPDATE nina.email_change_request SET confirmed_at = p_now WHERE id = r.id;
+  UPDATE nina.email_change_request SET confirmed_at = v_now WHERE id = r.id;
   INSERT INTO nina.audit_event (actor_user_id, action, entity_type, entity_id, metadata_safe, is_critical)
   VALUES (v_user, 'auth.email_changed', 'user', v_user, '{}'::jsonb, true);
   INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type) VALUES ('USER', v_user, 'EmailChanged');
   RETURN 'CHANGED';
 END $$;
 
--- Exclusao de conta (ADR-0009/0010, SR-016): o pedido so nasce por aqui. A confirmacao (reautenticacao) e COMPROVADA no
--- livro-razao e vinculada ao pedido; o app nao escreve confirmed_at. Sem p_reauth_jti_hash o pedido nasce nao confirmado
--- (confirm_account_deletion confirma depois; erase_user exige a confirmacao quando ha outros cuidadores).
-CREATE FUNCTION nina.request_account_deletion(p_reauth_jti_hash bytea DEFAULT NULL) RETURNS uuid
+-- Exclusao de conta (ADR-0009/0010, SR-016, NR-03/NR-14): o pedido so nasce por aqui, SEMPRE com reautenticacao ACCOUNT_DELETE
+-- comprovada no livro-razao (emitida pela API) e vinculada ao pedido; o app nao escreve confirmed_at. Ao criar o pedido o
+-- titular e os demais cuidadores ativos dos bebes que serao apagados sao avisados pelo outbox (o worker envia; sem PII).
+CREATE FUNCTION nina.request_account_deletion(p_reauth_jti_hash bytea) RETURNS uuid
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
 DECLARE v_user uuid := nina.current_user_id(); v_id uuid := gen_random_uuid();
 BEGIN
   IF v_user IS NULL OR NOT nina.is_active_baby_owner(v_user) THEN
     RAISE EXCEPTION 'NOT_BABY_OWNER: somente Owner ativo de um bebe exclui a conta; use privacy_request (ADR-0010)' USING ERRCODE = 'NN012';
   END IF;
-  IF p_reauth_jti_hash IS NOT NULL AND NOT nina.reauth_bind(p_reauth_jti_hash, 'ACCOUNT_DELETE', 'ACCOUNT_DELETION_REQUEST', v_id) THEN
-    RAISE EXCEPTION 'REAUTH_REQUIRED: confirmacao sem reautenticacao comprovada' USING ERRCODE = 'NN014';
+  IF NOT nina.reauth_bind(p_reauth_jti_hash, 'ACCOUNT_DELETE', 'ACCOUNT_DELETION_REQUEST', v_id) THEN
+    RAISE EXCEPTION 'REAUTH_REQUIRED: exclusao de conta exige reautenticacao comprovada' USING ERRCODE = 'NN014';
   END IF;
   INSERT INTO nina.account_deletion_request (id, user_id, grace_days, scheduled_for, confirmed_at, confirmation_method, reauth_jti_hash)
-  VALUES (v_id, v_user, 1, now(), CASE WHEN p_reauth_jti_hash IS NOT NULL THEN now() END,
-          CASE WHEN p_reauth_jti_hash IS NOT NULL THEN 'REAUTHENTICATION' END, p_reauth_jti_hash);   -- janela/estado: trigger account_deletion_guard
+  VALUES (v_id, v_user, 1, now(), now(), 'REAUTHENTICATION', p_reauth_jti_hash);   -- janela/estado: trigger account_deletion_guard
+  INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type, payload)
+  VALUES ('USER', v_user, 'AccountDeletionRequested', jsonb_build_object('request_id', v_id));
+  INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type, payload)
+  SELECT 'USER', m.user_id, 'SharedBabyDeletionScheduled', jsonb_build_object('baby_id', o.baby_id)
+    FROM nina.caregiver_membership o
+    JOIN nina.baby b ON b.id = o.baby_id AND b.deleted_at IS NULL
+    JOIN nina.caregiver_membership m ON m.baby_id = o.baby_id AND m.status = 'ACTIVE' AND m.user_id <> v_user
+   WHERE o.user_id = v_user AND o.role = 'OWNER' AND o.status = 'ACTIVE';
   RETURN v_id;
 END $$;
 
