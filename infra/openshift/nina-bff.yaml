@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nina-bff
+  labels: { app: nina-bff, app.kubernetes.io/part-of: nina }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: nina-bff }
+  template:
+    metadata:
+      labels: { app: nina-bff, app.kubernetes.io/part-of: nina }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: bff
+          image: REGISTRY/nina-bff:TAG  # placeholder: definir registry (ADR-0006)
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 8080 }
+          envFrom:
+            - configMapRef: { name: nina-config }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 384Mi }
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 2
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nina-bff
+  labels: { app: nina-bff, app.kubernetes.io/part-of: nina }
+spec:
+  selector: { app: nina-bff }
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: nina-bff
+  labels: { app: nina-bff, app.kubernetes.io/part-of: nina }
+spec:
+  # host: definir por ambiente (dominio pendente)
+  to: { kind: Service, name: nina-bff }
+  port: { targetPort: http }
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

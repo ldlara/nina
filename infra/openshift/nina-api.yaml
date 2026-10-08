@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nina-api
+  labels: { app: nina-api, app.kubernetes.io/part-of: nina }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: nina-api }
+  template:
+    metadata:
+      labels: { app: nina-api, app.kubernetes.io/part-of: nina }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: api
+          image: REGISTRY/nina-api:TAG  # placeholder: definir registry (ADR-0006)
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 8080 }
+          envFrom:
+            - configMapRef: { name: nina-config }
+          env:
+            - name: ConnectionStrings__Default
+              valueFrom:
+                secretKeyRef: { name: nina-secrets, key: ConnectionStrings__Default }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 384Mi }
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 2
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nina-api
+  labels: { app: nina-api, app.kubernetes.io/part-of: nina }
+spec:
+  selector: { app: nina-api }
+  ports:
+    - { name: http, port: 8080, targetPort: http }
