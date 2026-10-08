@@ -1,6 +1,6 @@
 using System.Net;
-using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.DependencyInjection;
 using Nina.Identity.Mail;
 using Nina.Identity.Tests.Infrastructure;
 using Nina.SharedKernel.Security;
