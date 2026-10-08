@@ -5,7 +5,6 @@
     <string name="common_confirm">Confirm</string>
     <string name="common_retry">Try again</string>
     <string name="common_loading">Loading</string>
-    <string name="common_close">Close</string>
     <string name="common_or">or</string>
     <string name="common_you">(you)</string>
 
@@ -70,7 +69,6 @@
     <string name="baby_due_date">Due date (optional)</string>
     <string name="baby_due_date_help">Helps adjust the schedule if the baby was born before the due date.</string>
     <string name="baby_date_not_set">Not set</string>
-    <string name="baby_pick_date">Pick date</string>
     <string name="baby_clear_due_date">Remove due date</string>
     <string name="baby_sex">Sex (optional)</string>
     <string name="baby_timezone">Time zone</string>
@@ -181,5 +179,4 @@
     <string name="field_future_date">The date cannot be in the future.</string>
     <string name="field_password_policy">The password does not meet the security policy.</string>
     <string name="field_name_too_long">Use at most %1$d characters.</string>
-    <string name="field_due_date_invalid">Check the due date.</string>
 </resources>

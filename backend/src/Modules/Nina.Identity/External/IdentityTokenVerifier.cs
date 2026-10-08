@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
@@ -161,19 +160,8 @@ public sealed class OidcIdentityTokenVerifier(IOptions<IdentityOptions> options,
     private static string? TryString(JsonWebToken jwt, string name) =>
         jwt.TryGetPayloadValue<string>(name, out var value) ? value : null;
 
-    // Apple envia email_verified como string "true"; Google como booleano.
-    private static bool TryBool(JsonWebToken jwt, string name)
-    {
-        if (jwt.TryGetPayloadValue<JsonElement>(name, out var element))
-        {
-            return element.ValueKind switch
-            {
-                JsonValueKind.True => true,
-                JsonValueKind.String => string.Equals(element.GetString(), "true", StringComparison.OrdinalIgnoreCase),
-                _ => false,
-            };
-        }
-
-        return false;
-    }
+    // Apple envia email_verified como string "true"; Google como booleano (o Claim expõe ambos como texto).
+    private static bool TryBool(JsonWebToken jwt, string name) =>
+        jwt.Claims.FirstOrDefault(c => c.Type == name) is { } claim
+        && string.Equals(claim.Value, "true", StringComparison.OrdinalIgnoreCase);
 }

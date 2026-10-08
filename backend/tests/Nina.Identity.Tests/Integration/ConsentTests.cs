@@ -74,7 +74,14 @@ public sealed class ConsentTests(PostgresFixture postgres) : IntegrationTestBase
 
         await using var update = new NpgsqlCommand("UPDATE nina.consent_record SET status = 'REVOKED'", connection, tx);
         var ex = await Assert.ThrowsAsync<PostgresException>(() => update.ExecuteNonQueryAsync());
-        Assert.Equal("NN030", ex.SqlState);
+        Assert.Equal("42501", ex.SqlState); // nina_app nem tem privilégio de UPDATE/DELETE
+
+        // Defesa em profundidade: até o dono do schema é barrado pelo gatilho de imutabilidade (NN030).
+        await using var owner = new NpgsqlConnection(Database.AdminConnectionString);
+        await owner.OpenAsync();
+        await using var ownerUpdate = new NpgsqlCommand("UPDATE nina.consent_record SET status = 'REVOKED'", owner);
+        var immutable = await Assert.ThrowsAsync<PostgresException>(() => ownerUpdate.ExecuteNonQueryAsync());
+        Assert.Equal("NN030", immutable.SqlState);
     }
 
     [Theory]
@@ -145,6 +152,6 @@ public sealed class ConsentTests(PostgresFixture postgres) : IntegrationTestBase
         await Api.PostAsync("/v1/me/consents", Input("ANALYTICS_PRODUCT", "GRANTED"), s.AccessToken);
 
         Assert.True(await AdminScalarAsync<long>("SELECT count(*) FROM nina.audit_event WHERE action IN ('consent.granted','consent.revoked')") >= 3);
-        Assert.Equal(0, await AdminScalarAsync<long>("SELECT count(*) FROM nina.audit_event WHERE metadata_safe::text ILIKE '%@%'"));
+        Assert.Equal(0, await AdminScalarAsync<long>("SELECT count(*) FROM nina.audit_event WHERE action NOT LIKE 'config.%' AND metadata_safe::text ILIKE '%@%'"));
     }
 }

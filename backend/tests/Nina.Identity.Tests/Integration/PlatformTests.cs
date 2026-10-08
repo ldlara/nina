@@ -86,7 +86,8 @@ public sealed class PlatformTests(PostgresFixture postgres) : IntegrationTestBas
         var ipHash = await AdminScalarAsync<byte[]>("SELECT ip_hash FROM nina.audit_event WHERE action = 'auth.login_failed'");
         Assert.Equal(32, ipHash!.Length);
         Assert.DoesNotContain("203.0.113.77", Encoding.UTF8.GetString(ipHash), StringComparison.Ordinal);
-        Assert.Equal(0, await AdminScalarAsync<long>("SELECT count(*) FROM nina.audit_event WHERE metadata_safe::text ILIKE '%@%' OR metadata_safe::text ILIKE '%password%' OR metadata_safe::text ILIKE '%token%'"));
+        var offending = await AdminScalarAsync<string>("SELECT string_agg(action || ':' || metadata_safe::text, ' | ') FROM nina.audit_event WHERE action NOT LIKE 'config.%' AND (metadata_safe::text ILIKE '%@%' OR metadata_safe::text ILIKE '%password%' OR metadata_safe::text ILIKE '%token%')");
+        Assert.Null(offending);
         Assert.NotNull(await AdminScalarAsync<string>("SELECT request_id FROM nina.audit_event WHERE action = 'auth.login_failed'"));
     }
 

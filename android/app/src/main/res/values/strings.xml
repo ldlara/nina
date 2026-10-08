@@ -9,7 +9,6 @@
     <string name="common_confirm">Confirmar</string>
     <string name="common_retry">Tentar novamente</string>
     <string name="common_loading">Carregando</string>
-    <string name="common_close">Fechar</string>
     <string name="common_or">ou</string>
     <string name="common_you">(você)</string>
 
@@ -78,7 +77,6 @@
     <string name="baby_due_date">Data prevista do parto (opcional)</string>
     <string name="baby_due_date_help">Ajuda a ajustar a agenda se o bebê nasceu antes do previsto.</string>
     <string name="baby_date_not_set">Não informada</string>
-    <string name="baby_pick_date">Escolher data</string>
     <string name="baby_clear_due_date">Remover data prevista</string>
     <string name="baby_sex">Sexo (opcional)</string>
     <string name="baby_timezone">Fuso horário</string>
@@ -193,5 +191,4 @@
     <string name="field_future_date">A data não pode estar no futuro.</string>
     <string name="field_password_policy">A senha não atende à política de segurança.</string>
     <string name="field_name_too_long">Use no máximo %1$d caracteres.</string>
-    <string name="field_due_date_invalid">Confira a data prevista do parto.</string>
 </resources>

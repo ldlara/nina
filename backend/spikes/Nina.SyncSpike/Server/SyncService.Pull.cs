@@ -98,16 +98,20 @@ public sealed partial class SyncService
         // H (ponto de consistência) = last_sequence lido no 1º request; continuações carregam o mesmo H no cursor.
         var h = cp != null ? cp.Babies[babyId].Seq : head;
         var pos = cp?.Snapshot;
-        var union = string.Join(" UNION ALL ", EntityCatalog.Feed.Select(f =>
-            $"SELECT {f.Rank} AS rank, '{f.LogType}' AS type, id FROM nina.{f.Table} WHERE {f.BabyCol} = @b AND deleted_at IS NULL"));
+        // keyset por tipo, na ordem do feed: (rank, id) > posição. Cada consulta usa `id > @after ORDER BY id LIMIT` (uma só tabela).
         var rows = new List<(int Rank, string Type, Guid Id)>();
-        await using (var q = Cmd(env,
-            $"SELECT rank, type, id FROM ({union}) x WHERE @r < 0 OR (rank, id) > (@r, @i) ORDER BY rank, id LIMIT @n"))
+        foreach (var f in EntityCatalog.Feed)
         {
-            P(q, "b", babyId, NpgsqlDbType.Uuid); P(q, "r", pos?.Rank ?? -1, NpgsqlDbType.Integer);
-            P(q, "i", pos?.Id ?? Guid.Empty, NpgsqlDbType.Uuid); P(q, "n", n + 1, NpgsqlDbType.Integer);
+            var remaining = n + 1 - rows.Count;
+            if (remaining <= 0) break;
+            if (pos != null && f.Rank < pos.Rank) continue;
+            await using var q = Cmd(env,
+                $"SELECT id FROM nina.{f.Table} WHERE {f.BabyCol} = @b AND deleted_at IS NULL AND (@after IS NULL OR id > @after) ORDER BY id LIMIT @n");
+            P(q, "b", babyId, NpgsqlDbType.Uuid);
+            P(q, "after", pos != null && f.Rank == pos.Rank ? pos.Id : null, NpgsqlDbType.Uuid);
+            P(q, "n", remaining, NpgsqlDbType.Integer);
             await using var r = await q.ExecuteReaderAsync(ct);
-            while (await r.ReadAsync(ct)) rows.Add((r.GetInt32(0), r.GetString(1), r.GetGuid(2)));
+            while (await r.ReadAsync(ct)) rows.Add((f.Rank, f.LogType, r.GetGuid(0)));
         }
         var hasMore = rows.Count > n;
         if (hasMore) rows.RemoveAt(rows.Count - 1);

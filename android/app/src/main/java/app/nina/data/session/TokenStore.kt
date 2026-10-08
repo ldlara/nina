@@ -2,6 +2,7 @@ package app.nina.data.session
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
@@ -64,19 +65,19 @@ class EncryptedTokenStore(private val context: Context) : TokenStore {
 
     @Synchronized
     override fun write(session: StoredSession) {
-        prefs.edit()
-            .putString(K_ACCESS, session.accessToken)
-            .putString(K_REFRESH, session.refreshToken)
-            .putString(K_REFRESH_EXP, session.refreshExpiresAt)
-            .putString(K_USER_ID, session.userId)
-            .putString(K_EMAIL, session.email)
-            .putString(K_NAME, session.displayName)
-            .apply()
+        prefs.edit {
+            putString(K_ACCESS, session.accessToken)
+            putString(K_REFRESH, session.refreshToken)
+            putString(K_REFRESH_EXP, session.refreshExpiresAt)
+            putString(K_USER_ID, session.userId)
+            putString(K_EMAIL, session.email)
+            putString(K_NAME, session.displayName)
+        }
     }
 
     @Synchronized
     override fun clear() {
-        prefs.edit().clear().apply()
+        prefs.edit { clear() }
     }
 
     private companion object {

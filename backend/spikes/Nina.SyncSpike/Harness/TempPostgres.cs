@@ -88,6 +88,14 @@ public sealed class TempPostgres : IAsyncDisposable
         await using (var cmd = new NpgsqlCommand("SHOW server_version", c)) Version = (string)(await cmd.ExecuteScalarAsync())!;
     }
 
+    /// <summary>Aplica um script SQL arbitrário como superuser (psql, ON_ERROR_STOP).</summary>
+    public async Task ApplySqlAsync(string sql)
+    {
+        var f = Path.Combine(Dir, $"adhoc-{Guid.NewGuid():N}.sql");
+        await File.WriteAllTextAsync(f, sql);
+        await ApplySqlFileAsync(f);
+    }
+
     private Task ApplySqlFileAsync(string path)
     {
         var o = Run(Path.Combine(_bin, "psql"),

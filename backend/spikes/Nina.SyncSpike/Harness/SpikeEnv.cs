@@ -35,6 +35,15 @@ public sealed class SpikeEnv : IAsyncDisposable
         Service = new SyncService(App, new CursorCodec(Secret), Clock);
     }
 
+    /// <summary>Aplica spike_tuning.sql (RLS por conjunto + índices do snapshot); a semântica das políticas não muda.</summary>
+    public async Task ApplyTuningAsync()
+    {
+        var asm = typeof(SpikeEnv).Assembly;
+        await using var st = asm.GetManifestResourceStream(asm.GetManifestResourceNames().Single(n => n.EndsWith("spike_tuning.sql")))!;
+        using var rd = new StreamReader(st);
+        await Pg.ApplySqlAsync(await rd.ReadToEndAsync());
+    }
+
     public SyncService NewService(SyncOptions options) => new(App, new CursorCodec(Secret), Clock, options);
 
     public static async Task<SpikeEnv> StartAsync()

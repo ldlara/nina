@@ -58,7 +58,7 @@ public sealed class PasswordHasher : IDisposable
 
     private PasswordCheck VerifyCore(string password, string phc)
     {
-        if (!TryParse(phc, out var m, out var t, out var p, out var salt, out var expected))
+        if (password.Length == 0 || !TryParse(phc, out var m, out var t, out var p, out var salt, out var expected))
         {
             return new PasswordCheck(false, false);
         }

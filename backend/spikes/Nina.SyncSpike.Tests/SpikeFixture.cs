@@ -10,7 +10,12 @@ namespace Nina.SyncSpike.Tests;
 public sealed class SpikeFixture : IAsyncLifetime
 {
     public SpikeEnv Env { get; private set; } = null!;
-    public async Task InitializeAsync() => Env = await SpikeEnv.StartAsync();
+    public async Task InitializeAsync()
+    {
+        Env = await SpikeEnv.StartAsync();
+        // NINA_SPIKE_TUNED=1: roda a suíte inteira com as políticas RLS por conjunto + índices (spike_tuning.sql)
+        if (Environment.GetEnvironmentVariable("NINA_SPIKE_TUNED") == "1") await Env.ApplyTuningAsync();
+    }
     public async Task DisposeAsync() => await Env.DisposeAsync();
 }
 
