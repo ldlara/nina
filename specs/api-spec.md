@@ -197,7 +197,7 @@ Há exemplos no próprio OpenAPI para: cadastro, requisição de privacidade (an
 
 ## 7. Pontos em aberto
 
-Dúvidas D-nn são as de `specs/product-spec.md` seção 9. PA-nn são novas, geradas por esta spec. Itens marcados **Resolvido** foram decididos no ADR-0009 e já estão no contrato.
+Dúvidas D-nn são as de `specs/product-spec.md` seção 9. PA-nn são novas, geradas por esta spec. Itens marcados **Resolvido** foram decididos nos ADR-0009/0010 e já estão no contrato.
 
 | ID | Ponto | Impacto | Sugestão |
 |---|---|---|---|
@@ -205,9 +205,9 @@ Dúvidas D-nn são as de `specs/product-spec.md` seção 9. PA-nn são novas, ge
 | PA-02 | Cursor por bebê (contrato atual) ou por usuário (um pull para todos os bebês). Por bebê simplifica revogação (INV-14) e o snapshot, ao custo de N chamadas. | Cliente e ARCH-003. | Por bebê. |
 | PA-03 | INV-19 diz "version por bebê é monotônica"; o contrato usa `version` por entidade e a ordem global vem do cursor. Confirmar que é suficiente para `base_version` e conflito. | Modelo de sync. | Manter por entidade. |
 | PA-04 | **Resolvido (ADR-0009).** Sono sobreposto (D-05): aceito e sinalizado por padrão (`ACCEPT_AND_WARN`), configurável por flag para `REJECT` (`REJECTED`, `SLEEP_OVERLAP`). Exposto em `/reference-data` -> `policies.sleep_overlap_policy`. | RF-008-A6, RF-009-A3, RF-009-A8. | Nada a fazer; UX deve tratar as duas políticas. |
-| PA-05 | **Em aberto (mantido por ADR-0009, decisão 3).** Amamentação em curso: o domínio exige `end_at` para `BREASTFEEDING`, mas RF-015-A2 prevê timer. O contrato exige `end_at` (o timer vive só no cliente até parar). Consequência: outro cuidador não vê a mamada em curso. A resposta do usuário sobre permitir `end_at` nulo foi ambígua; reabrir se o timer de mamada for necessário. | RF-015, RF-007. | Reabrir se o timer compartilhado for requisito. |
+| PA-05 | **Resolvido (ADR-0010, decisão 5).** `end_at` é obrigatório em `BREASTFEEDING`; o timer vive só no cliente até parar. Consequência conhecida e aceita: outro cuidador não vê a mamada em curso. Reabrir só se o timer compartilhado virar requisito (tornar `end_at` opcional na criação seria mudança aditiva). | RF-015, RF-007. | Nada a fazer. |
 | PA-06 | **Resolvido em parte (ADR-0009).** Exclusão de conta de Owner com outros cuidadores: política `CASCADE` por padrão (apaga também para os demais, com `acknowledge_other_caregivers=true` e reauth); `BLOCK` e `TRANSFER_OWNERSHIP` por flag. Pendente: validação jurídica (DJ-09) e a opção "excluir só o vínculo do Owner" segue sem suporte. | RF-045, DJ-09. | Aguardar DJ-09. |
-| PA-07 | **Resolvido (ADR-0009).** Janela de arrependimento mantida: `scheduled_for` e `DELETE /me/deletion-request`. Duração da janela é parâmetro (a definir com produto/jurídico). | RF-045. | Definir duração. |
+| PA-07 | **Resolvido (ADR-0009 e ADR-0010).** Janela de arrependimento mantida: `scheduled_for`, `DELETE /me/deletion-request`; duração de **7 dias** (`policies.deletion_grace_days`, padrão 7, customizável em banco). | RF-045. | Nada a fazer. |
 | PA-08 | Assento premium (ADR-0005, D-04): `PUT/DELETE /subscriptions/family-seat` é **proposta** (`x-status: proposed`). Resolvido por ADR-0009: o adicional não precisa ser cuidador ativo (aceita `email` ou `membership_id`). Em aberto: o que ocorre se o titular cancelar, quem edita flags em produção (fora desta API), vínculo do assento por e-mail antes do cadastro do convidado e privacidade do e-mail. | RF-043. | Decidir cancelamento e fluxo do convite de assento. |
 | PA-09 | `404` (sem vínculo) × `403 ACCESS_REVOKED` (revogado) distingue quem já teve acesso. Aceitável porque o ex-membro já conhecia o recurso; confirmar com segurança (SECURITY-REVIEW-001). | RF-004-A6, RF-006-A5. | Manter. |
 | PA-10 | Obrigatoriedade de novo aceite (RF-003-A2): o contrato devolve `pending_consents`/`pending_required` e só bloqueia criação de bebê e aceite de convite (`403 CONSENT_REQUIRED`). Bloqueio global é decisão do cliente. | RF-003. | Confirmar o escopo do bloqueio do servidor. |
@@ -217,21 +217,61 @@ Dúvidas D-nn são as de `specs/product-spec.md` seção 9. PA-nn são novas, ge
 | PA-14 | Foto do bebê (D-09): só `photo_ref` somente leitura; sem endpoint de upload no MVP. | RF-004. | Decidir D-09. |
 | PA-15 | Notificações de rotina (D-28): categoria `routine` só tem `enabled`, antecedência e quiet hours; falta a estrutura do lembrete (horários, recorrência). `DEVELOPMENT_PHASE` fica `available=false` (D-10). | RF-037-A8. | Decidir D-28. |
 | PA-16 | Quiet hours são por categoria (como no domínio) mas a UX as mostra como um único intervalo. O cliente pode replicar o valor em todas. Modelar quiet hours globais por usuário é alternativa. | RF-038. | Confirmar com UX. |
-| PA-17 | Despertares noturnos (D-12): **resolvido no contrato** por `WakeEvent` + `night_awakenings` derivado (AD-22). Em aberto: valor do critério de suficiência (`night_awakenings_min_coverage_percent`), regra de inferência (`INFERRED`) no servidor e atribuição de sessões à meia-noite (D-13, regra de bucket na implementação). | RF-010, RF-028. | Definir critério; decidir D-13. |
+| PA-17 | Despertares noturnos (D-12): **resolvido no contrato** por `WakeEvent` + `night_awakenings` derivado (AD-22). Critério de suficiência definido (ADR-0010): `limits.night_awakenings_min_session_minutes`, padrão 240, customizável. Em aberto: regra de inferência (`INFERRED`) no servidor e atribuição de sessões à meia-noite (D-13, regra de bucket na implementação). | RF-010, RF-028. | Decidir D-13 e a regra de `INFERRED`. |
 | PA-18 | Mínimo de dados para tendência (D-27): o servidor informa `data_sufficiency.min_days_required`; a UX cita 3 dias. | RF-029. | Decidir D-27. |
 | PA-19 | Domínio, regiões e ambientes (`api.nina.app` é placeholder); requisito de região Brasil (DJ-04). | `servers`. | Definir com infra. |
 | PA-20 | Idempotência de `Idempotency-Key` guarda a resposta por 24 h; confirmar retenção e tamanho do armazenamento com backend. | AD-10. | Spike ARCH-003. |
 | PA-21 | Perfis `SleepSession` etc. guardam `notes` livre: limite de 500 caracteres é suposição (SEC-043). | Validação. | Confirmar. |
 | PA-22 | Cabeçalho de versão mínima do app (`426`) e canal de comunicação (loja) não estão definidos. | AD-01. | Definir política de suporte (D-41). |
 | PA-23 | Eventos de analytics (RF-048) não são parte desta API; confirmar que o app envia direto ao fornecedor e que o SDK respeita o consentimento `analytics_product`. | RF-048. | Confirmar com PRIV-001. |
-| PA-24 | Nomes de campo: o ADR-0009 cita camelCase (`ageCalculation`, `nightAwakenings`); o contrato é `snake_case` em todo o resto, então usa `age_calculation`, `chronological_days`, `corrected_days`, `correction_applied`, `night_awakenings`. | Clientes e SDKs. | Manter `snake_case` (consistência); confirmar com o autor do ADR. |
-| PA-25 | Enums passaram de minúsculas (rascunho: `wet`, `breast`, `left`) para maiúsculas (`WET`, `BREASTFEEDING`, `LEFT`), conforme ADR-0009. Quebra em relação ao rascunho `1.0.0-draft.1`, ainda sem clientes. `sleep_type`, `source` de sono (`timer`/`manual`), `sex` e demais enums continuam em minúsculas. | Padronização de enums. | Decidir se os demais enums também migram para maiúsculas antes do congelamento. |
+| PA-24 | **Resolvido (ADR-0010, decisão 1).** `snake_case` confirmado em todo o contrato (`age_calculation`, `chronological_days`, `corrected_days`, `correction_applied`, `night_awakenings`). Não há mais pendência. | Clientes e SDKs. | Nada a fazer. |
+| PA-25 | **Resolvido (ADR-0010, decisão 2).** Todos os enums em MAIÚSCULAS (inclui `sleep_type`, `sex`, `source`, papéis, `status`, `platform`, `op`, `entity_type`, `period`...). Quebra em relação ao rascunho `1.0.0-draft.1`, que não tinha clientes. Clientes toleram valores desconhecidos (AD-27). | Padronização de enums. | Nada a fazer. |
 | PA-26 | `FeedingType` inclui `SOLID` e `OTHER`; para eles o contrato aceita `end_at` nulo e não há `side`/`volume_ml`/`milk_type`. Regras de validação e agregados (`/aggregates.feeding` só conta mama e mamadeira) para sólidos ficam por definir. | RF-015, RF-028. | Definir com produto. |
-| PA-27 | "Somente o Owner exclui a conta" (ADR-0009): o contrato retorna `403 FORBIDDEN_ROLE` a quem tem só vínculo de Caregiver/ReadOnly; usuário sem nenhum vínculo pode excluir. Isso pode conflitar com o direito de eliminação do titular de dados (LGPD art. 18); um cuidador convidado só consegue sair do bebê (`DELETE caregivers/{id}`) e pedir exclusão ao suporte. | RF-045, DJ-09. | Validar com jurídico (DJ-09) antes do congelamento. |
-| PA-28 | Janela de aplicação da idade corrigida (ADR-0005/0009): exposta como `policies.corrected_age_max_months` (nulo = sem limite). Valor padrão a definir pelo produto. | RF-005. | Definir. |
+| PA-27 | **Resolvido no contrato (ADR-0010, decisão 3); validação jurídica pendente (DJ-09).** Só o Owner ativo de um bebê exclui a conta (403 para os demais, sem exceção para quem não tem vínculo). Quem não é Owner exerce acesso, correção, exportação e eliminação/anonimização dos próprios dados por `/me/privacy-requests`, sem apagar dados do bebê (AD-28). | RF-045, DJ-09. | Validar com jurídico antes de produção. |
+| PA-28 | **Resolvido (ADR-0010, decisão 4).** Janela da idade corrigida: `policies.corrected_age_max_months`, padrão inicial 24, customizável em banco. | RF-005. | Nada a fazer. |
 | PA-29 | `WakeEvent` fora de `/timeline` e de `GET /events/{id}`: só trafega em `/sync/pull` e é derivado em `night_awakenings`. Confirmar se a UI precisa listar despertares online sem sync, e quem gera `INFERRED`. | RF-010, RF-016. | Confirmar com UX. |
+| PA-30 | Requisições de privacidade (AD-28): prazos (`privacy_request_sla_days` = 15, `privacy_request_ack_hours` = 48), verificação de identidade, motivos de recusa (`rejection_code`, p.ex. retenção legal) e quais consentimentos/registros são retidos por obrigação legal na anonimização dependem do jurídico (DJ-07, DJ-09). | RF-044, RF-045. | Validar com jurídico; os valores são parâmetros de banco. |
+| PA-31 | Comportamento da `ANONYMIZATION` de não-Owner (proposta de engenharia): sai de todos os bebês, autoria dos eventos que registrou passa a rótulo anônimo (eventos ficam para os demais), mesma janela de arrependimento da exclusão (`deletion_grace_days`) e cancelável. Confirmar com produto/jurídico se a janela deve valer aqui e como a UI exibe o autor anonimizado. | RF-045, RF-019-A5. | Confirmar com produto e jurídico. |
 
-## 8. Validação do contrato
+## 8. Congelamento v1
+
+O contrato `contracts/openapi.yaml` está marcado como **`info.version: 1.0.0`** (ADR-0010). A partir daqui, `/v1` é estável para os apps do MVP.
+
+### 8.1 Regras de mudança
+
+| Tipo | Regra |
+|---|---|
+| **Aditivas (permitidas em `/v1`, versão minor/patch)** | Novo endpoint, método ou caminho; novo campo **opcional** em resposta; novo campo opcional em requisição (com padrão que preserva o comportamento); novo parâmetro de consulta ou cabeçalho **opcional**; novos valores de enum (clientes toleram desconhecidos, AD-27); novos códigos de erro (`code`) e novas extensões de `Problem`; novas políticas e limites em `/reference-data` (valores de `policies`/`limits` são dados, mudam sem alterar o contrato); esclarecimentos de descrição e exemplos. |
+| **Breaking (exigem `/v2`)** | Remover ou renomear endpoint, campo, parâmetro ou valor de enum; tornar obrigatório um campo, parâmetro ou cabeçalho antes opcional; mudar tipo, formato, unidade ou semântica de um campo (inclusive de `null`/`0`); estreitar valores aceitos em requisições; mudar códigos HTTP de sucesso ou o significado de um `code` existente; mudar a convenção de enums em maiúsculas ou de `snake_case`; mudar as regras de autorização para mais restritivas. |
+| **Processo** | Toda mudança passa por `npx @redocly/cli@1.34.5 lint` e `python3 -m openapi_spec_validator`, atualiza o changelog abaixo e, se aditiva, incrementa minor (1.1.0); se só documentação, patch (1.0.1). Quebra: novo prefixo `/v2` convivendo com `/v1`, com `Deprecation` e `Sunset` em `/v1` (AD-01) e suporte mínimo definido em PA-22. |
+| **Entrada x saída** | Clientes ignoram campos e valores de enum desconhecidos **em respostas**. Em requisições, objetos com `additionalProperties: false` rejeitam campo desconhecido com `400 VALIDATION_FAILED`; por isso um campo novo de requisição só é aditivo quando opcional. |
+
+### 8.2 Changelog
+
+| Versão | Data | Mudanças |
+|---|---|---|
+| 1.0.0 | 2026-10-08 | **Congelamento v1 (ADR-0010).** `snake_case` confirmado; todos os enums em MAIÚSCULAS com exemplos atualizados e nota de tolerância a valores desconhecidos; exclusão de conta restrita a Owner ativo de um bebê (`403 FORBIDDEN_ROLE` com `privacy_request_path`); novos `/me/privacy-requests` (4 operações: acesso, correção, exportação, eliminação/anonimização dos próprios dados, com reautenticação, status e prazo) e campo `scope` em `/me/data-exports`; janela de arrependimento de 7 dias em `policies.deletion_grace_days`, `AccountDeletion.scheduled_for` e `grace_days`; PA-05 resolvido (`end_at` obrigatório); padrões 24 meses (`corrected_age_max_months`) e 240 minutos (`limits.night_awakenings_min_session_minutes`, que substitui `night_awakenings_min_coverage_percent`) documentados como customizáveis; novos `policies.privacy_request_sla_days` e `privacy_request_ack_hours`; exemplo de `/reference-data`. |
+| 1.0.0-draft.1 | 2026-10-08 | Rascunho API-001 com revisão ADR-0009 (idade, enums extensíveis, `WakeEvent`, flags de sono sobreposto e exclusão, assento premium). Sem clientes. |
+
+### 8.3 Pontos ainda abertos (não bloqueiam o v1)
+
+Nenhum bloqueia o congelamento; a maioria é decisão de produto/jurídico que se resolve por **dado** (flag/parâmetro) ou por mudança aditiva. Detalhes na seção 7.
+
+| ID | Resumo | Natureza |
+|---|---|---|
+| PA-02, PA-03 | Cursor por bebê (atual) e `version` por entidade (atual); confirmar no spike ARCH-003. | Implementação; contrato não muda. |
+| PA-06, PA-27, PA-30, PA-31 | Validação jurídica (DJ-07, DJ-09) da exclusão em cascata, das requisições de privacidade, dos prazos e do comportamento da anonimização. | Jurídico; valores são parâmetros. |
+| PA-08 | Assento premium (`x-status: proposed`): cancelamento do titular, fluxo do convite de assento, privacidade do e-mail. | Produto; endpoint marcado como proposta. |
+| PA-09, PA-11 | `404` x `403 ACCESS_REVOKED`; visibilidade de nome e e-mail entre cuidadores. | Segurança/privacidade. |
+| PA-10, PA-12, PA-13 | Escopo do `403 CONSENT_REQUIRED`; `If-Match` obrigatório (`428`); `400` x `422` na validação. **PA-13 deve ser decidido antes de gerar SDK**, pois trocar o código é quebra. | Contrato/cliente. |
+| PA-14, PA-15, PA-16, PA-18 | Foto do bebê (D-09), estrutura de lembretes de rotina (D-28), quiet hours globais, mínimo de dias de tendência (D-27). | Produto/UX; aditivos. |
+| PA-17, PA-29 | Regra de `INFERRED`, atribuição de sessões à meia-noite (D-13) e listagem de despertares online. | Produto/implementação. |
+| PA-19, PA-20, PA-22 | Domínio e regiões (DJ-04), retenção de idempotência, política de versão mínima do app. | Infra. |
+| PA-21, PA-23, PA-26 | Limite de `notes`, analytics fora da API, regras de `SOLID`/`OTHER`. | Produto/validação. |
+
+Resolvidos neste fechamento: PA-01, PA-04, PA-05, PA-07, PA-24, PA-25, PA-28 e, no contrato, PA-27.
+
+## 9. Validação do contrato
 
 - `npx @redocly/cli@1.34.5 lint contracts/openapi.yaml`: sem erros nem avisos (configuração recomendada).
 - `python3 -m openapi_spec_validator contracts/openapi.yaml`: OK.
