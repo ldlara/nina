@@ -342,7 +342,7 @@ LANGUAGE sql AS $$
 CREATE TABLE nina.change_log (
   baby_id        uuid   NOT NULL,                    -- sem FK: sobrevive a casca do bebe ate a purga
   sync_sequence  bigint NOT NULL,
-  entity_type    text   NOT NULL CHECK (entity_type IN ('baby', 'sleep_session', 'feeding_session', 'pumping_session', 'diaper_event', 'sleep_schedule_preference')),
+  entity_type    text   NOT NULL CHECK (entity_type IN ('baby', 'sleep_session', 'feeding_session', 'pumping_session', 'diaper_event', 'wake_event', 'sleep_schedule_preference')),
   entity_id      uuid   NOT NULL,
   op             text   NOT NULL CHECK (op IN ('upsert', 'delete')),
   actor_user_id  uuid,
@@ -470,7 +470,8 @@ CREATE TABLE nina.sleep_session (
   deleted_at       timestamptz,
   created_by       uuid REFERENCES nina.app_user(id) ON DELETE SET NULL,
   last_modified_by uuid REFERENCES nina.app_user(id) ON DELETE SET NULL,
-  CONSTRAINT sleep_interval_ck CHECK (end_at IS NULL OR end_at >= start_at)            -- INV-01
+  CONSTRAINT sleep_interval_ck CHECK (end_at IS NULL OR end_at >= start_at),           -- INV-01
+  CONSTRAINT sleep_session_id_baby_uq UNIQUE (id, baby_id)                              -- alvo da FK composta de wake_event
 );
 CREATE UNIQUE INDEX sleep_one_open_uq ON nina.sleep_session (baby_id)                  -- INV-02
   WHERE end_at IS NULL AND deleted_at IS NULL;
@@ -479,13 +480,14 @@ CREATE INDEX sleep_timeline_ix ON nina.sleep_session (baby_id, start_at DESC) WH
 CREATE TABLE nina.feeding_session (
   id               uuid PRIMARY KEY,
   baby_id          uuid NOT NULL REFERENCES nina.baby(id) ON DELETE CASCADE,
-  feeding_type     text NOT NULL CHECK (feeding_type IN ('breast', 'bottle')),
+  feeding_type     text NOT NULL CHECK (feeding_type IN ('BREASTFEEDING', 'BOTTLE', 'SOLID', 'OTHER')),   -- ADR-0009; clientes toleram valores novos
   start_at         timestamptz NOT NULL,
   end_at           timestamptz,
   tz               nina.iana_tz NOT NULL,
-  side             text CHECK (side IN ('left', 'right', 'both')),
+  side             text CHECK (side IN ('LEFT', 'RIGHT', 'BOTH')),
   volume_ml        numeric(6,1) CHECK (volume_ml > 0 AND volume_ml <= 5000),
-  milk_type        text CHECK (length(milk_type) <= 40),
+  -- ADR-0009: so se aplica a mamadeira (feeding_shape_ck); UNKNOWN reservado a migracao de dados antigos
+  milk_type        text CHECK (milk_type IN ('BREAST_MILK', 'FORMULA', 'MIXED', 'OTHER', 'UNSPECIFIED', 'UNKNOWN')),
   notes            text CHECK (length(notes) <= 2000),
   version          bigint NOT NULL DEFAULT 0,
   created_at       timestamptz NOT NULL DEFAULT now(),
@@ -494,11 +496,14 @@ CREATE TABLE nina.feeding_session (
   created_by       uuid REFERENCES nina.app_user(id) ON DELETE SET NULL,
   last_modified_by uuid REFERENCES nina.app_user(id) ON DELETE SET NULL,
   CONSTRAINT feeding_interval_ck CHECK (end_at IS NULL OR end_at >= start_at),         -- INV-01
-  CONSTRAINT feeding_shape_ck CHECK (                                                   -- INV-07
-       (feeding_type = 'breast' AND side IS NOT NULL AND end_at IS NOT NULL
+  CONSTRAINT feeding_shape_ck CHECK (                                                   -- INV-07 / ADR-0009
+       (feeding_type = 'BREASTFEEDING' AND side IS NOT NULL AND end_at IS NOT NULL
           AND volume_ml IS NULL AND milk_type IS NULL)
-    OR (feeding_type = 'bottle' AND side IS NULL))
+    OR (feeding_type = 'BOTTLE' AND side IS NULL)                                       -- unico tipo com milk_type
+    OR (feeding_type = 'SOLID' AND side IS NULL AND volume_ml IS NULL AND milk_type IS NULL)
+    OR (feeding_type = 'OTHER' AND side IS NULL AND milk_type IS NULL))
 );
+COMMENT ON COLUMN nina.feeding_session.milk_type IS 'ADR-0009: NULL quando feeding_type <> BOTTLE (nao se aplica). Em BOTTLE, NULL = indisponivel; UNSPECIFIED = usuario nao especificou.';
 CREATE INDEX feeding_timeline_ix ON nina.feeding_session (baby_id, start_at DESC) WHERE deleted_at IS NULL;
 
 CREATE TABLE nina.pumping_session (
@@ -508,7 +513,7 @@ CREATE TABLE nina.pumping_session (
   end_at           timestamptz,
   tz               nina.iana_tz NOT NULL,
   volume_ml        numeric(6,1) CHECK (volume_ml > 0 AND volume_ml <= 5000),
-  side             text CHECK (side IN ('left', 'right', 'both')),
+  side             text CHECK (side IN ('LEFT', 'RIGHT', 'BOTH')),
   notes            text CHECK (length(notes) <= 2000),
   version          bigint NOT NULL DEFAULT 0,
   created_at       timestamptz NOT NULL DEFAULT now(),
@@ -525,7 +530,7 @@ CREATE TABLE nina.diaper_event (
   baby_id          uuid NOT NULL REFERENCES nina.baby(id) ON DELETE CASCADE,
   occurred_at      timestamptz NOT NULL,
   tz               nina.iana_tz NOT NULL,
-  diaper_type      text NOT NULL CHECK (length(diaper_type) BETWEEN 1 AND 40),      -- D-08
+  diaper_type      text NOT NULL CHECK (diaper_type IN ('WET', 'DIRTY', 'MIXED', 'DRY', 'UNSPECIFIED')),   -- ADR-0009 (WET urina; DIRTY fezes; MIXED ambos; DRY verificada sem nada)
   notes            text CHECK (length(notes) <= 2000),
   version          bigint NOT NULL DEFAULT 0,
   created_at       timestamptz NOT NULL DEFAULT now(),
@@ -535,6 +540,40 @@ CREATE TABLE nina.diaper_event (
   last_modified_by uuid REFERENCES nina.app_user(id) ON DELETE SET NULL
 );
 CREATE INDEX diaper_timeline_ix ON nina.diaper_event (baby_id, occurred_at DESC) WHERE deleted_at IS NULL;
+
+-- Despertar noturno (ADR-0009): fonte da verdade de nightAwakenings (que e DERIVADO, nunca persistido).
+CREATE TABLE nina.wake_event (
+  id                  uuid PRIMARY KEY,
+  baby_id             uuid NOT NULL REFERENCES nina.baby(id) ON DELETE CASCADE,
+  sleep_session_id    uuid NOT NULL,
+  started_at          timestamptz NOT NULL,
+  ended_at            timestamptz,
+  tz                  nina.iana_tz NOT NULL,
+  -- derivada de started_at/ended_at (nunca divergente); NULL enquanto ended_at for NULL
+  duration_seconds    integer GENERATED ALWAYS AS (
+                        CASE WHEN ended_at IS NULL THEN NULL
+                             ELSE extract(epoch FROM (ended_at - started_at))::integer END) STORED,
+  source              text NOT NULL CHECK (source IN ('MANUAL', 'INFERRED', 'IMPORT')),
+  -- correcao manual: marca que o usuario ajustou o evento e preserva o valor original (ex.: inferido)
+  manually_corrected  boolean NOT NULL DEFAULT false,
+  original_started_at timestamptz,
+  original_ended_at   timestamptz,
+  version             bigint NOT NULL DEFAULT 0,
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now(),
+  deleted_at          timestamptz,
+  created_by          uuid REFERENCES nina.app_user(id) ON DELETE SET NULL,
+  last_modified_by    uuid REFERENCES nina.app_user(id) ON DELETE SET NULL,
+  CONSTRAINT wake_interval_ck CHECK (ended_at IS NULL OR ended_at >= started_at),
+  CONSTRAINT wake_original_ck CHECK (manually_corrected OR (original_started_at IS NULL AND original_ended_at IS NULL)),
+  CONSTRAINT wake_original_interval_ck CHECK (original_ended_at IS NULL OR original_started_at IS NULL OR original_ended_at >= original_started_at),
+  -- mesma crianca da sessao de sono (impede apontar para sessao de outro bebe)
+  CONSTRAINT wake_session_fk FOREIGN KEY (sleep_session_id, baby_id)
+    REFERENCES nina.sleep_session (id, baby_id) ON DELETE CASCADE
+);
+COMMENT ON TABLE nina.wake_event IS 'ADR-0009: despertares dentro de uma sessao de sono. Sincronizavel (change_log/tombstone). Limites dentro da sessao NAO sao impostos no banco (edicao offline); validar na API.';
+CREATE INDEX wake_session_ix ON nina.wake_event (sleep_session_id) WHERE deleted_at IS NULL;
+CREATE INDEX wake_timeline_ix ON nina.wake_event (baby_id, started_at DESC) WHERE deleted_at IS NULL;
 
 CREATE TABLE nina.sleep_schedule_preference (   -- RF-014; 1 por bebe
   id                uuid PRIMARY KEY,
@@ -570,11 +609,81 @@ CREATE INDEX sleep_prediction_ix ON nina.sleep_prediction (baby_id, kind, comput
 DO $$
 DECLARE t text; e text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['sleep_session', 'feeding_session', 'pumping_session', 'diaper_event', 'sleep_schedule_preference'] LOOP
+  FOREACH t IN ARRAY ARRAY['sleep_session', 'feeding_session', 'pumping_session', 'diaper_event', 'wake_event', 'sleep_schedule_preference'] LOOP
     EXECUTE format('CREATE TRIGGER %I BEFORE INSERT OR UPDATE ON nina.%I FOR EACH ROW EXECUTE FUNCTION nina.sync_stamp_child()', t || '_stamp', t);
     EXECUTE format('CREATE TRIGGER %I AFTER INSERT OR UPDATE ON nina.%I FOR EACH ROW EXECUTE FUNCTION nina.sync_log_change(%L)', t || '_sync_log', t, t);
   END LOOP;
 END $$;
+
+-- Excluir uma sessao de sono exclui (tombstone) seus despertares, para os dispositivos convergirem
+CREATE FUNCTION nina.sleep_session_cascade_wake() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
+BEGIN
+  UPDATE nina.wake_event
+     SET deleted_at = NEW.deleted_at, last_modified_by = NEW.last_modified_by
+   WHERE sleep_session_id = NEW.id AND deleted_at IS NULL;
+  RETURN NULL;
+END $$;
+CREATE TRIGGER sleep_session_wake_cascade AFTER UPDATE ON nina.sleep_session
+  FOR EACH ROW WHEN (OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL)
+  EXECUTE FUNCTION nina.sleep_session_cascade_wake();
+
+-- Politica de sobreposicao de sono (ADR-0009): app_parameter 'sleep.overlap_policy'
+--   accept_and_warn (padrao): aceita e a API sinaliza (nina.sleep_overlaps); reject: recusa (NN006).
+-- Nome 'zz': dispara DEPOIS de sleep_session_stamp, que ja segurou o lock do contador do bebe;
+-- isso serializa escritores concorrentes do mesmo bebe e torna a checagem confiavel.
+CREATE FUNCTION nina.sleep_overlap_guard() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
+BEGIN
+  IF NEW.deleted_at IS NULL AND nina.param_text('sleep.overlap_policy', 'accept_and_warn') = 'reject'
+     AND EXISTS (SELECT 1 FROM nina.sleep_session o
+                  WHERE o.baby_id = NEW.baby_id AND o.id <> NEW.id AND o.deleted_at IS NULL
+                    AND tstzrange(o.start_at, coalesce(o.end_at, 'infinity'), '[)')
+                        && tstzrange(NEW.start_at, coalesce(NEW.end_at, 'infinity'), '[)')) THEN
+    RAISE EXCEPTION 'SLEEP_OVERLAP: sessao de sono sobrepoe outra (sleep.overlap_policy=reject)' USING ERRCODE = 'NN006';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER sleep_session_zz_overlap BEFORE INSERT OR UPDATE ON nina.sleep_session
+  FOR EACH ROW EXECUTE FUNCTION nina.sleep_overlap_guard();
+
+-- Sinalizacao (accept_and_warn): ids das sessoes que se sobrepoem a p_session (respeita RLS do chamador)
+CREATE FUNCTION nina.sleep_overlaps(p_session uuid) RETURNS SETOF uuid
+LANGUAGE sql STABLE AS $$
+  SELECT o.id FROM nina.sleep_session s
+    JOIN nina.sleep_session o ON o.baby_id = s.baby_id AND o.id <> s.id AND o.deleted_at IS NULL
+   WHERE s.id = p_session AND s.deleted_at IS NULL
+     AND tstzrange(o.start_at, coalesce(o.end_at, 'infinity'), '[)') && tstzrange(s.start_at, coalesce(s.end_at, 'infinity'), '[)')
+   ORDER BY o.start_at $$;
+
+-- nightAwakenings DERIVADO (ADR-0009): NULL = dados insuficientes; 0 = acompanhamento suficiente sem despertar; N>0.
+-- Havendo despertares registrados, o numero e devolvido (ha evidencia). Sem eles, 'suficiente' = sessao
+-- noturna encerrada com duracao >= app_parameter 'sleep.night_awakenings.min_session_minutes'.
+CREATE FUNCTION nina.night_awakenings(p_session uuid) RETURNS integer
+LANGUAGE sql STABLE AS $$
+  SELECT CASE
+           WHEN s.id IS NULL OR s.sleep_type <> 'night' THEN NULL
+           WHEN w.n > 0 THEN w.n
+           WHEN s.end_at IS NOT NULL
+                AND s.end_at - s.start_at >= make_interval(mins => nina.param_int('sleep.night_awakenings.min_session_minutes', 240)) THEN 0
+           ELSE NULL
+         END
+    FROM (SELECT 1) x
+    LEFT JOIN nina.sleep_session s ON s.id = p_session AND s.deleted_at IS NULL
+    CROSS JOIN LATERAL (SELECT count(*)::integer AS n FROM nina.wake_event e
+                         WHERE e.sleep_session_id = p_session AND e.deleted_at IS NULL) w $$;
+
+-- Idade (ADR-0009): SEMPRE derivada; nenhuma idade corrigida e persistida.
+-- corrected = cronologica - (due_date - birth_date), so se birth_date < due_date e dentro da janela
+-- 'age.corrected_window_months' (idade cronologica). corrected_days pode ser negativo (antes do termo).
+CREATE FUNCTION nina.age_calculation(p_birth date, p_due date, p_on date DEFAULT current_date)
+RETURNS TABLE (chronological_days integer, corrected_days integer, correction_applied boolean)
+LANGUAGE sql STABLE AS $$
+  SELECT (p_on - p_birth),
+         CASE WHEN a.ok THEN (p_on - p_birth) - (p_due - p_birth) END,
+         a.ok
+    FROM (SELECT p_due IS NOT NULL AND p_birth < p_due
+                 AND p_on < (p_birth + make_interval(months => nina.param_int('age.corrected_window_months', 24)))::date AS ok) a $$;
 
 -- -----------------------------------------------------------------------------
 -- 6. Notificações e outbox
@@ -879,6 +988,33 @@ BEGIN
 END $$;
 CREATE TRIGGER app_parameter_bump BEFORE INSERT OR UPDATE ON nina.app_parameter FOR EACH ROW EXECUTE FUNCTION nina.bump_param_version();
 
+-- Valida valores das flags/parametros de dominio (ADR-0009) para um valor invalido nunca chegar a producao
+CREATE FUNCTION nina.validate_app_parameter() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  CASE NEW.param_key
+    WHEN 'sleep.overlap_policy' THEN
+      IF NEW.value #>> '{}' NOT IN ('accept_and_warn', 'reject') THEN
+        RAISE EXCEPTION 'sleep.overlap_policy invalida: % (accept_and_warn|reject)', NEW.value #>> '{}' USING ERRCODE = 'check_violation';
+      END IF;
+    WHEN 'privacy.owner_deletion_policy' THEN
+      IF NEW.value #>> '{}' NOT IN ('cascade', 'block', 'transfer_ownership') THEN
+        RAISE EXCEPTION 'privacy.owner_deletion_policy invalida: % (cascade|block|transfer_ownership)', NEW.value #>> '{}' USING ERRCODE = 'check_violation';
+      END IF;
+    WHEN 'age.corrected_window_months' THEN
+      IF NEW.value_type <> 'int' OR (NEW.value #>> '{}')::numeric NOT BETWEEN 1 AND 120 THEN
+        RAISE EXCEPTION 'age.corrected_window_months deve ser int entre 1 e 120' USING ERRCODE = 'check_violation';
+      END IF;
+    WHEN 'sleep.night_awakenings.min_session_minutes' THEN
+      IF NEW.value_type <> 'int' OR (NEW.value #>> '{}')::numeric NOT BETWEEN 0 AND 1440 THEN
+        RAISE EXCEPTION 'sleep.night_awakenings.min_session_minutes deve ser int entre 0 e 1440' USING ERRCODE = 'check_violation';
+      END IF;
+    ELSE NULL;
+  END CASE;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER app_parameter_validate BEFORE INSERT OR UPDATE ON nina.app_parameter FOR EACH ROW EXECUTE FUNCTION nina.validate_app_parameter();
+
 DO $$
 DECLARE t text;
 BEGIN
@@ -910,8 +1046,14 @@ CREATE TABLE nina.account_deletion_request (
   status        text NOT NULL DEFAULT 'requested' CHECK (status IN ('requested', 'scheduled', 'blocked', 'completed', 'cancelled')),
   scheduled_for timestamptz,                             -- janela de arrependimento (D-07)
   block_reason  text CHECK (block_reason IN ('owner_has_other_caregivers')),
+  -- ADR-0009: confirmacao explicita (reautenticacao) registrada pela API ao criar o pedido; exigida pela
+  -- politica 'cascade' quando a exclusao apaga dados de bebe com outros cuidadores ativos
+  confirmed_at        timestamptz,
+  confirmation_method text CHECK (confirmation_method IN ('reauthentication')),
+  policy_applied      text CHECK (policy_applied IN ('cascade', 'block', 'transfer_ownership')),   -- preenchido por erase_user
   completed_at  timestamptz,
-  cancelled_at  timestamptz
+  cancelled_at  timestamptz,
+  CONSTRAINT deletion_confirmation_ck CHECK ((confirmed_at IS NULL) = (confirmation_method IS NULL))
 );
 CREATE UNIQUE INDEX account_deletion_open_uq ON nina.account_deletion_request (user_id) WHERE status IN ('requested', 'scheduled', 'blocked');
 
@@ -925,6 +1067,7 @@ LANGUAGE plpgsql AS $$
 BEGIN
   PERFORM 1 FROM nina.baby WHERE id = p_baby AND deleted_at IS NULL FOR UPDATE;
   IF NOT FOUND THEN RETURN; END IF;                       -- idempotente
+  DELETE FROM nina.wake_event WHERE baby_id = p_baby;
   DELETE FROM nina.sleep_session WHERE baby_id = p_baby;
   DELETE FROM nina.feeding_session WHERE baby_id = p_baby;
   DELETE FROM nina.pumping_session WHERE baby_id = p_baby;
@@ -951,29 +1094,79 @@ BEGIN
   VALUES ('baby', p_baby, 'BabyDeleted');
 END $$;
 
--- Exclusao de conta. Politica padrao 'block' (ADR-0008 opcao b): NAO apaga dados
--- de outros cuidadores; recusa quando o usuario e Owner ativo de bebe com
--- outros membros ativos. Outras politicas aguardam decisao (DJ-09).
+-- Exclusao de conta (ADR-0008 + ADR-0009). Politica em app_parameter 'privacy.owner_deletion_policy':
+--   cascade (PADRAO): apaga o bebe do qual o usuario e Owner MESMO com outros cuidadores ativos.
+--       Exige confirmacao registrada (account_deletion_request.confirmed_at, reautenticacao) quando ha
+--       outros cuidadores (NN007) e grava auditoria por bebe compartilhado. Validacao juridica: DJ-09.
+--   block: recusa (NN004) se Owner ativo de bebe com outros membros ativos; nada de terceiros e tocado.
+--   transfer_ownership: promove o cuidador ativo mais antigo (caregiver antes de read_only) a Owner,
+--       move o bebe para a familia dele e segue com a exclusao; sem outro membro, o bebe e apagado.
+-- Bebes em que o usuario e o unico membro ativo sao sempre apagados.
 CREATE FUNCTION nina.erase_user(p_user uuid, p_actor uuid DEFAULT NULL) RETURNS void
 LANGUAGE plpgsql AS $$
-DECLARE v_policy text := nina.param_text('privacy.owner_deletion_policy', 'block'); r record;
+DECLARE
+  v_policy text := nina.param_text('privacy.owner_deletion_policy', 'cascade');
+  r record;
+  v_req nina.account_deletion_request%ROWTYPE;
+  v_new_owner uuid;
+  v_family uuid;
 BEGIN
   PERFORM 1 FROM nina.app_user WHERE id = p_user AND status <> 'deleted' FOR UPDATE;
   IF NOT FOUND THEN RETURN; END IF;                       -- idempotente
-  IF v_policy <> 'block' THEN
-    RAISE EXCEPTION 'politica % ainda nao implementada (ADR-0008 em aberto)', v_policy USING ERRCODE = 'NN005';
+  IF v_policy NOT IN ('cascade', 'block', 'transfer_ownership') THEN
+    RAISE EXCEPTION 'politica % desconhecida (cascade|block|transfer_ownership)', v_policy USING ERRCODE = 'NN005';
   END IF;
+  SELECT * INTO v_req FROM nina.account_deletion_request
+   WHERE user_id = p_user AND status IN ('requested', 'scheduled') ORDER BY requested_at DESC LIMIT 1;
+
+  -- Pre-checagens (antes de qualquer alteracao)
   IF EXISTS (SELECT 1 FROM nina.caregiver_membership o
               JOIN nina.baby b ON b.id = o.baby_id AND b.deleted_at IS NULL
              WHERE o.user_id = p_user AND o.role = 'owner' AND o.status = 'active'
                AND EXISTS (SELECT 1 FROM nina.caregiver_membership m
                             WHERE m.baby_id = o.baby_id AND m.status = 'active' AND m.user_id <> p_user)) THEN
-    RAISE EXCEPTION 'OWNER_HAS_OTHER_CAREGIVERS: transferir a propriedade antes (ADR-0008)' USING ERRCODE = 'NN004';
+    IF v_policy = 'block' THEN
+      RAISE EXCEPTION 'OWNER_HAS_OTHER_CAREGIVERS: transferir a propriedade antes (ADR-0008)' USING ERRCODE = 'NN004';
+    ELSIF v_policy = 'cascade' AND (v_req.id IS NULL OR v_req.confirmed_at IS NULL) THEN
+      RAISE EXCEPTION 'CASCADE_CONFIRMATION_REQUIRED: apagar dados de outros cuidadores exige confirmacao registrada (ADR-0009)' USING ERRCODE = 'NN007';
+    END IF;
   END IF;
-  -- Bebes em que e o unico membro ativo: exclusao em cascata do conteudo
-  FOR r IN SELECT o.baby_id FROM nina.caregiver_membership o
-            WHERE o.user_id = p_user AND o.role = 'owner' AND o.status = 'active' LOOP
-    PERFORM nina.erase_baby(r.baby_id, p_actor);
+
+  FOR r IN SELECT o.baby_id,
+                  (SELECT count(*) FROM nina.caregiver_membership m
+                    WHERE m.baby_id = o.baby_id AND m.status = 'active' AND m.user_id <> p_user)::integer AS others
+             FROM nina.caregiver_membership o
+             JOIN nina.baby b ON b.id = o.baby_id AND b.deleted_at IS NULL
+            WHERE o.user_id = p_user AND o.role = 'owner' AND o.status = 'active'
+            ORDER BY o.baby_id LOOP
+    IF r.others > 0 AND v_policy = 'transfer_ownership' THEN
+      SELECT m.user_id INTO v_new_owner FROM nina.caregiver_membership m
+       WHERE m.baby_id = r.baby_id AND m.status = 'active' AND m.user_id <> p_user
+       ORDER BY (m.role = 'caregiver') DESC, m.accepted_at, m.id LIMIT 1;
+      UPDATE nina.caregiver_membership
+         SET status = 'revoked', revoked_at = now(), revoked_reason = 'ownership_transferred'
+       WHERE baby_id = r.baby_id AND user_id = p_user AND role = 'owner' AND status = 'active';
+      UPDATE nina.caregiver_membership SET role = 'owner'
+       WHERE baby_id = r.baby_id AND user_id = v_new_owner AND status = 'active';
+      SELECT id INTO v_family FROM nina.family WHERE owner_user_id = v_new_owner;
+      IF v_family IS NULL THEN
+        INSERT INTO nina.family (owner_user_id) VALUES (v_new_owner) RETURNING id INTO v_family;
+      END IF;
+      UPDATE nina.baby SET family_id = v_family, last_modified_by = p_actor WHERE id = r.baby_id;
+      INSERT INTO nina.audit_event (actor_user_id, actor_type, action, entity_type, entity_id, baby_id, metadata_safe, is_critical)
+      VALUES (p_actor, CASE WHEN p_actor IS NULL THEN 'system' ELSE 'user' END, 'baby.ownership_transferred', 'baby', r.baby_id, r.baby_id,
+              jsonb_build_object('reason', 'owner_account_deletion'), true);
+      INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type)
+      VALUES ('baby', r.baby_id, 'BabyOwnershipTransferred');
+    ELSE
+      IF r.others > 0 THEN   -- cascade sobre bebe compartilhado: auditoria com a confirmacao registrada
+        INSERT INTO nina.audit_event (actor_user_id, actor_type, action, entity_type, entity_id, baby_id, metadata_safe, is_critical)
+        VALUES (p_actor, CASE WHEN p_actor IS NULL THEN 'system' ELSE 'user' END, 'account.cascade_shared_baby_erased', 'baby', r.baby_id, r.baby_id,
+                jsonb_build_object('other_active_members', r.others, 'confirmed_at', v_req.confirmed_at,
+                                   'confirmation_method', v_req.confirmation_method, 'request_id', v_req.id), true);
+      END IF;
+      PERFORM nina.erase_baby(r.baby_id, p_actor);
+    END IF;
   END LOOP;
   -- Vinculos remanescentes (cuidador em bebe de outros): remover vinculo, preservar dados dos demais
   DELETE FROM nina.caregiver_membership WHERE user_id = p_user;
@@ -989,10 +1182,11 @@ BEGIN
   UPDATE nina.data_export_request SET file_ref = NULL, status = 'expired' WHERE user_id = p_user AND file_ref IS NOT NULL;
   UPDATE nina.app_user SET status = 'deleted', email = NULL, email_verified_at = NULL, locale = NULL,
          timezone = NULL, deleted_at = now() WHERE id = p_user;
-  UPDATE nina.account_deletion_request SET status = 'completed', completed_at = now()
+  UPDATE nina.account_deletion_request SET status = 'completed', completed_at = now(), policy_applied = v_policy
    WHERE user_id = p_user AND status IN ('requested', 'scheduled');
-  INSERT INTO nina.audit_event (actor_user_id, actor_type, action, entity_type, entity_id, is_critical)
-  VALUES (p_actor, CASE WHEN p_actor IS NULL THEN 'system' ELSE 'user' END, 'account.erased', 'user', p_user, true);
+  INSERT INTO nina.audit_event (actor_user_id, actor_type, action, entity_type, entity_id, metadata_safe, is_critical)
+  VALUES (p_actor, CASE WHEN p_actor IS NULL THEN 'system' ELSE 'user' END, 'account.erased', 'user', p_user,
+          jsonb_build_object('policy', v_policy), true);
   INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type)
   VALUES ('user', p_user, 'AccountDeleted');
 END $$;
@@ -1035,6 +1229,7 @@ BEGIN
       WHEN 'feeding_session'            THEN DELETE FROM nina.feeding_session WHERE id = r.entity_id AND deleted_at IS NOT NULL;
       WHEN 'pumping_session'            THEN DELETE FROM nina.pumping_session WHERE id = r.entity_id AND deleted_at IS NOT NULL;
       WHEN 'diaper_event'               THEN DELETE FROM nina.diaper_event WHERE id = r.entity_id AND deleted_at IS NOT NULL;
+      WHEN 'wake_event'                 THEN DELETE FROM nina.wake_event WHERE id = r.entity_id AND deleted_at IS NOT NULL;
       WHEN 'sleep_schedule_preference'  THEN DELETE FROM nina.sleep_schedule_preference WHERE id = r.entity_id AND deleted_at IS NOT NULL;
       WHEN 'baby'                       THEN DELETE FROM nina.baby WHERE id = r.entity_id AND deleted_at IS NOT NULL;  -- cascata remove membros e head
       ELSE NULL;
@@ -1102,7 +1297,7 @@ DO $$
 DECLARE t text;
 BEGIN
   -- baby-scoped: leitura por qualquer membro ativo, escrita por owner/caregiver
-  FOREACH t IN ARRAY ARRAY['sleep_session', 'feeding_session', 'pumping_session', 'diaper_event', 'sleep_schedule_preference', 'sleep_prediction'] LOOP
+  FOREACH t IN ARRAY ARRAY['sleep_session', 'feeding_session', 'pumping_session', 'diaper_event', 'wake_event', 'sleep_schedule_preference', 'sleep_prediction'] LOOP
     EXECUTE format('ALTER TABLE nina.%I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('CREATE POLICY app_select ON nina.%I FOR SELECT TO nina_app USING (nina.can_read_baby(baby_id))', t);
     EXECUTE format('CREATE POLICY app_insert ON nina.%I FOR INSERT TO nina_app WITH CHECK (nina.can_write_baby(baby_id))', t);
@@ -1121,7 +1316,7 @@ BEGIN
     EXECUTE format('ALTER TABLE nina.%I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('CREATE POLICY app_select ON nina.%I FOR SELECT TO nina_app USING (user_id = nina.current_user_id())', t);
   END LOOP;
-  FOREACH t IN ARRAY ARRAY['notification_preference', 'auth_session', 'device_push_token', 'consent_record', 'data_export_request', 'account_deletion_request'] LOOP
+  FOREACH t IN ARRAY ARRAY['notification_preference', 'auth_session', 'device_push_token', 'consent_record', 'data_export_request'] LOOP
     EXECUTE format('CREATE POLICY app_insert ON nina.%I FOR INSERT TO nina_app WITH CHECK (user_id = nina.current_user_id())', t);
   END LOOP;
   FOREACH t IN ARRAY ARRAY['notification_preference', 'auth_session', 'device_push_token'] LOOP
@@ -1132,7 +1327,19 @@ BEGIN
   END LOOP;
 END $$;
 
--- baby
+-- Exclusao de conta (ADR-0009): somente o Owner. Interpretacao [P]: pode pedir quem e Owner ativo de ao menos
+-- um bebe ou quem nao tem nenhum vinculo ativo (conta sem bebe); quem so e caregiver/read_only deve antes
+-- sair dos bebes (revogar o proprio vinculo).
+CREATE FUNCTION nina.can_request_account_deletion() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = nina, pg_temp AS
+$$ SELECT EXISTS (SELECT 1 FROM nina.caregiver_membership m
+                   WHERE m.user_id = nina.current_user_id() AND m.role = 'owner' AND m.status = 'active')
+       OR NOT EXISTS (SELECT 1 FROM nina.caregiver_membership m
+                       WHERE m.user_id = nina.current_user_id() AND m.status = 'active') $$;
+CREATE POLICY app_insert ON nina.account_deletion_request FOR INSERT TO nina_app
+  WITH CHECK (user_id = nina.current_user_id() AND nina.can_request_account_deletion());
+
+-- baby (perfil editavel somente pelo Owner - ADR-0009)
 ALTER TABLE nina.baby ENABLE ROW LEVEL SECURITY;
 CREATE POLICY app_select ON nina.baby FOR SELECT TO nina_app
   USING (nina.can_read_baby(id) OR nina.is_family_owner(family_id));
@@ -1175,7 +1382,7 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA nina TO nina_worker;
 GRANT SELECT, INSERT, UPDATE ON
   nina.app_user, nina.user_credential, nina.user_identity, nina.auth_session, nina.refresh_token,
   nina.recovery_request, nina.device_push_token, nina.family, nina.baby, nina.caregiver_membership,
-  nina.sleep_session, nina.feeding_session, nina.pumping_session, nina.diaper_event,
+  nina.sleep_session, nina.feeding_session, nina.pumping_session, nina.diaper_event, nina.wake_event,
   nina.sleep_schedule_preference, nina.sleep_prediction, nina.sync_mutation,
   nina.notification_preference, nina.notification_job, nina.outbox_message,
   nina.subscription, nina.family_entitlement, nina.family_entitlement_member,
@@ -1186,15 +1393,17 @@ GRANT SELECT ON nina.change_log, nina.tombstone, nina.plan, nina.feature_flag, n
 GRANT SELECT, INSERT ON nina.consent_record TO nina_app;
 GRANT INSERT ON nina.audit_event TO nina_app;                     -- sem leitura pelo app
 GRANT EXECUTE ON FUNCTION nina.current_user_id(), nina.user_plan_code(uuid), nina.user_has_feature(uuid, text),
-  nina.param_int(text, integer), nina.param_text(text, text) TO nina_app;
+  nina.param_int(text, integer), nina.param_text(text, text),
+  nina.sleep_overlaps(uuid), nina.night_awakenings(uuid), nina.age_calculation(date, date, date) TO nina_app;
 -- helpers de RLS e triggers: executados pelo planner/trigger com o papel corrente
 GRANT EXECUTE ON FUNCTION nina.baby_role(uuid), nina.can_read_baby(uuid), nina.can_write_baby(uuid),
-  nina.is_family_owner(uuid), nina.can_bootstrap_owner(uuid) TO nina_app;
+  nina.is_family_owner(uuid), nina.can_bootstrap_owner(uuid), nina.can_request_account_deletion() TO nina_app;
 -- Funcoes de trigger (SECURITY DEFINER/INVOKER) precisam ser executaveis por quem dispara o trigger
 GRANT EXECUTE ON FUNCTION nina.sync_stamp_child(), nina.sync_stamp_baby(), nina.sync_log_change(),
   nina.baby_validate(), nina.check_baby_has_owner(), nina.check_entitlement_member(), nina.touch_updated_at(),
   nina.audit_chain(), nina.forbid_mutation(), nina.log_config_change(), nina.bump_param_version(),
-  nina.next_sync_sequence(uuid) TO nina_app, nina_config_admin;
+  nina.next_sync_sequence(uuid), nina.sleep_session_cascade_wake(), nina.sleep_overlap_guard(),
+  nina.validate_app_parameter() TO nina_app, nina_config_admin;
 
 -- config: editada somente por nina_config_admin (auditada por trigger)
 GRANT SELECT, INSERT, UPDATE, DELETE ON nina.plan, nina.feature_flag, nina.plan_feature, nina.app_parameter TO nina_config_admin;
@@ -1214,7 +1423,10 @@ INSERT INTO nina.app_parameter (param_key, value, value_type, description) VALUE
   ('sync.changelog_retention_days',     '90'::jsonb,    'int',    'Retencao do change log; cursor mais antigo => cursor expirado (ADR-0003)'),
   ('prediction.retention_days',         '90'::jsonb,    'int',    'Retencao de previsoes derivadas (privacy-spec 4)'),
   ('push.token_inactivity_days',        '60'::jsonb,    'int',    'Inatividade para apagar token de push (privacy-spec 4)'),
-  ('privacy.owner_deletion_policy',     '"block"'::jsonb, 'string', 'ADR-0008 (aberto): block = recusar exclusao do Owner com outros cuidadores ativos');
+  ('privacy.owner_deletion_policy',     '"cascade"'::jsonb, 'string', 'ADR-0009: politica de exclusao de conta. cascade (padrao) = apaga o bebe tambem para outros cuidadores, com confirmacao registrada; block = recusa; transfer_ownership = promove cuidador mais antigo'),
+  ('sleep.overlap_policy',              '"accept_and_warn"'::jsonb, 'string', 'ADR-0009: sono sobreposto. accept_and_warn (padrao) = aceita e sinaliza; reject = recusa (NN006)'),
+  ('age.corrected_window_months',       '24'::jsonb,    'int',    'ADR-0009: janela (idade cronologica, em meses) em que a idade corrigida se aplica. Valor inicial proposto; produto confirma'),
+  ('sleep.night_awakenings.min_session_minutes', '240'::jsonb, 'int', 'ADR-0009: duracao minima (min) de sessao noturna encerrada para considerar o acompanhamento suficiente (0 despertares em vez de nulo). Valor inicial proposto');
 
 INSERT INTO nina.consent_purpose (purpose_key, description, is_required, scope, current_version, in_mvp) VALUES
   ('terms_of_use',        'Aceite dos Termos de Uso',                                   true,  'user', '1.0.0', true),
@@ -1224,6 +1436,6 @@ INSERT INTO nina.consent_purpose (purpose_key, description, is_required, scope, 
   ('marketing_email',     'E-mails promocionais',                                       false, 'user', '1.0.0', false),
   ('push_notifications',  'Registro de token e envio de push',                          false, 'user', '1.0.0', true);
 
-INSERT INTO nina.schema_migration (version, description) VALUES ('0001', 'init: modelo fisico MVP (DB-001)');
+INSERT INTO nina.schema_migration (version, description) VALUES ('0001', 'init: modelo fisico MVP (DB-001) + convencoes ADR-0009');
 
 COMMIT;

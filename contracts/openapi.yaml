@@ -27,6 +27,23 @@ info:
       vínculo revogado recebe `403` com `code=ACCESS_REVOKED`.
     - **Saúde:** previsões e tendências são orientação, não diagnóstico (RNF-014); a API devolve
       chaves de texto e o cliente localiza o aviso.
+    - **Convenção de nulos e vazios (ADR-0009):** `null` = *não se aplica* ou *indisponível/desconhecido*
+      (cada campo documenta qual dos dois, quando o contexto os distingue). `0` = valor conhecido igual a zero;
+      nunca se usa `0` para "não informado". Em enums, `UNSPECIFIED` = o usuário deliberadamente não especificou;
+      `UNKNOWN` = deveria existir mas o sistema não sabe (ex.: migração de dados antigos; reservado, o cliente
+      não o envia).
+    - **Enums extensíveis (ADR-0009):** `DiaperType`, `FeedingType` e `MilkType` (marcados `x-extensible-enum`)
+      podem ganhar valores sem nova versão. O cliente **deve tolerar valores desconhecidos** (exibir como
+      "outro"/genérico, nunca falhar); o servidor valida a entrada contra o conjunto vigente de `/reference-data`.
+    - **Nomes de campo:** o contrato usa `snake_case`. Os nomes do ADR-0009 em camelCase (`ageCalculation`,
+      `chronologicalDays`, `nightAwakenings`...) correspondem a `age_calculation`, `chronological_days`,
+      `night_awakenings`...
+    - **Cadastro e escrita de eventos (ADR-0009):** a conta só fica ativa após confirmação de e-mail (a sessão
+      nasce em `POST /auth/email/verify`). Eventos de tracking são escritos **somente** por `POST /sync/push`
+      (online = lote de 1 mutação); não há `POST/PATCH/DELETE` de eventos.
+    - **Políticas por flag (ADR-0005/0009):** o comportamento de sono sobreposto (`accept_and_warn` | `reject`)
+      e a política de exclusão de conta (`cascade` | `block` | `transfer_ownership`) são configuração em banco,
+      expostas em `GET /reference-data` (`policies`). O cliente não decide; apenas reflete a política vigente.
   contact:
     name: Time Nina (API)
   license:
@@ -49,7 +66,7 @@ tags:
   - name: Caregivers
     description: Cuidadores, convites e papéis.
   - name: Tracking
-    description: Leitura de eventos (sono, mamada, mamadeira, fralda, pumping) e timeline. Escrita via Sync.
+    description: Leitura de eventos (sono, mamada, mamadeira, fralda, pumping) e timeline. Escrita via Sync. Despertares (`WakeEvent`) trafegam só no Sync.
   - name: Sync
     description: Push idempotente de mutações e pull incremental por cursor opaco.
   - name: Sleep
@@ -74,7 +91,8 @@ paths:
       summary: Cadastrar conta com e-mail e senha
       description: |
         Resposta **uniforme** (`202`) exista ou não o e-mail, para impedir enumeração (RF-001-A2).
-        Um código de verificação é enviado ao e-mail; a sessão só é emitida em `/auth/email/verify`.
+        Um código de verificação é enviado ao e-mail; **a conta só fica ativa após a confirmação por e-mail** e a
+        sessão só é emitida em `/auth/email/verify` (ADR-0009, decisão 1).
         Aceite de Termos e Política é obrigatório (RF-003-A1).
       security: []
       x-rf: [RF-001, RF-003]
@@ -112,6 +130,7 @@ paths:
       tags: [Auth]
       operationId: verifyEmail
       summary: Confirmar e-mail e abrir a primeira sessão
+      description: Ativa a conta (ADR-0009) e emite a primeira sessão. Antes disso não existe sessão nem conta ativa.
       security: []
       x-rf: [RF-001]
       requestBody:
@@ -639,7 +658,9 @@ paths:
       tags: [Babies]
       operationId: getBaby
       summary: Obter bebê
-      description: Inclui idades calculadas na data local do bebê (RF-005).
+      description: |
+        Inclui idades calculadas na data local do bebê (RF-005). `age_calculation` é a fonte canônica da idade
+        cronológica e corrigida em dias; a idade corrigida **nunca é persistida** (ADR-0009).
       x-rf: [RF-004, RF-005]
       x-roles: [Owner, Caregiver, ReadOnly]
       responses:
@@ -658,8 +679,9 @@ paths:
       operationId: updateBaby
       summary: Editar bebê
       description: |
-        Merge-patch. Alterar `birth_date`, `due_date` ou `timezone` recalcula idades e previsões e
-        **não** altera eventos históricos (RB-003/014). `If-Match` com a `version` evita sobrescrita.
+        **Somente o Owner** edita o perfil do bebê (ADR-0009, decisão 6); Caregiver e ReadOnly recebem
+        `403 FORBIDDEN_ROLE`. Merge-patch. Alterar `birth_date`, `due_date` ou `timezone` recalcula idades e
+        previsões e **não** altera eventos históricos (RB-003/014). `If-Match` com a `version` evita sobrescrita.
       x-rf: [RF-004, RF-005, RF-012]
       x-roles: [Owner]
       parameters:
@@ -677,7 +699,18 @@ paths:
               schema: { $ref: '#/components/schemas/Baby' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403':
+          description: Papel insuficiente (`FORBIDDEN_ROLE` para Caregiver e ReadOnly) ou vínculo revogado (`ACCESS_REVOKED`).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                notOwner:
+                  value:
+                    type: https://api.nina.app/problems/forbidden-role
+                    title: Only the Owner can edit the baby profile
+                    status: 403
+                    code: FORBIDDEN_ROLE
         '404': { $ref: '#/components/responses/NotFound' }
         '412': { $ref: '#/components/responses/PreconditionFailed' }
     delete:
@@ -1069,6 +1102,15 @@ paths:
         concorrentes são resolvidas por last-write-wins por campo e auditadas (`resolution`, `conflicts`).
         Update sobre tombstone **não ressuscita** (`rejected`, `ENTITY_DELETED`). `device_id` deve ser o da
         sessão. `client_created_at` é preservado mesmo com relógio errado; anomalia grande vem em `warnings`.
+
+        **Sono sobreposto (ADR-0009, decisão 5):** governado pela flag `sleep_overlap_policy`
+        (`GET /reference-data` -> `policies`). Padrão `accept_and_warn`: a mutação é `applied` com
+        `resolution=kept_both` e `warnings[SLEEP_OVERLAP]`. Com `reject`: a mutação é `rejected`,
+        `problem.code=SLEEP_OVERLAP`, `retryable=false`, sem alterar estado.
+
+        **Entidades:** `sleep_session`, `feeding_session`, `pumping_session`, `diaper_event` e `wake_event`
+        (despertar, ADR-0009). Excluir uma `sleep_session` gera tombstone também dos seus `wake_event`.
+        Mamada `BREASTFEEDING` exige `end_at` (ponto aberto PA-05; o timer vive só no cliente até parar).
       x-rf: [RF-046, RF-047, RF-008, RF-009, RF-015, RF-016, RF-017, RF-018, RF-020]
       x-roles: [Owner, Caregiver]
       requestBody:
@@ -1114,7 +1156,7 @@ paths:
                       data:
                         occurred_at: '2026-10-08T17:54:00Z'
                         tz: America/Sao_Paulo
-                        diaper_type: wet
+                        diaper_type: WET
               deleteEvent:
                 summary: Excluir evento
                 value:
@@ -1175,6 +1217,10 @@ paths:
         ponto de consistência na primeira página, de modo que o último `next_cursor` do snapshot continua em delta.
         **Com `cursor`**: delta, apenas mudanças posteriores, incluindo **tombstones** (`op=tombstone`).
 
+        Entidades do feed: `baby`, `sleep_session`, `feeding_session`, `pumping_session`, `diaper_event`,
+        `wake_event` (despertares, ADR-0009), `sleep_preferences` e `sleep_prediction`. Um `wake_event` removido
+        (ou removido em cascata com sua `sleep_session`) chega como `tombstone`.
+
         O cursor é **opaco**: o cliente só o guarda e o devolve, nunca interpreta nem compara. Aplicação das
         mudanças é idempotente e ordenada por `version` por entidade; se `has_more=true`, continuar com `next_cursor`.
 
@@ -1228,7 +1274,7 @@ paths:
                           created_by: { id: 3c1c0d0e-5b61-4d6e-8a3a-0a0c5d1d9f01, display_name: Ana }
                           last_modified_by: { id: 3c1c0d0e-5b61-4d6e-8a3a-0a0c5d1d9f01, display_name: Ana }
                           occurred_at: '2026-10-08T17:54:00Z'
-                          diaper_type: wet
+                          diaper_type: WET
                       - op: tombstone
                         entity_type: sleep_session
                         entity_id: 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d
@@ -1358,6 +1404,11 @@ paths:
         período anterior do mesmo bebê** (RB-013); nunca ranking nem percentil. Período sem dado: `buckets`
         vazios e `data_sufficiency.sufficient=false`, não zeros enganosos (RF-028-A2). Alvo p95 < 500 ms.
         Atribuição de sessões que cruzam a meia-noite segue D-13.
+
+        `night_awakenings` e `night_awakenings_avg` são **derivados** dos `WakeEvent` (nunca gravados):
+        `null` = dados insuficientes (acompanhamento abaixo do critério de `/reference-data`
+        `limits.night_awakenings_min_coverage_percent`); `0` = acompanhamento suficiente e nenhum despertar;
+        `N>0` = quantidade de despertares.
       x-rf: [RF-028, RF-029, RF-010]
       x-roles: [Owner, Caregiver, ReadOnly]
       parameters:
@@ -1394,11 +1445,11 @@ paths:
                     buckets:
                       - local_date: '2026-10-05'
                         start_at: '2026-10-05T03:00:00Z'
-                        sleep: { total_minutes: 820, night_minutes: 610, nap_minutes: 210, nap_count: 3, night_wakings: null }
+                        sleep: { total_minutes: 820, night_minutes: 610, nap_minutes: 210, nap_count: 3, night_awakenings: 2 }
                         feeding: { breast_count: 4, breast_minutes: 62, bottle_count: 3, bottle_volume_ml: 450 }
                         pumping: { count: 0, minutes: 0, volume_ml: 0 }
-                        diapers: { count: 6, by_type: { wet: 4, dirty: 2 } }
-                    summary: { days_counted: 3, sleep_total_minutes_avg: 805, nap_count_avg: 3, feeding_count_avg: 7, diaper_count_avg: 6 }
+                        diapers: { count: 6, by_type: { WET: 4, DIRTY: 2 } }
+                    summary: { days_counted: 3, sleep_total_minutes_avg: 805, nap_count_avg: 3, night_awakenings_avg: 1.5, feeding_count_avg: 7, diaper_count_avg: 6 }
                     comparison:
                       kind: own_history
                       previous_range: { from: '2026-09-28', to: '2026-10-04' }
@@ -1556,8 +1607,11 @@ paths:
       operationId: assignFamilySeat
       summary: Atribuir o assento premium a um cuidador (PROPOSTA)
       description: |
-        **Proposta sujeita a D-04/ADR-0005.** Plano premium por família: titular + 1 membro adicional. Define quem
-        herda o premium do Owner entre os cuidadores ativos. Revogar o cuidador remove o benefício imediatamente.
+        **Proposta sujeita a D-04/ADR-0005.** Plano premium por família: titular + 1 membro adicional.
+        Por ADR-0009 (decisão 7) o **adicional não precisa ser cuidador ativo do bebê**: o Owner informa um
+        `membership_id` de cuidador existente **ou** um `email` (a pessoa recebe o assento ao entrar/cadastrar-se
+        com esse e-mail verificado, sem vínculo com bebê). Informar exatamente um dos dois. Revogar ou remover
+        um cuidador **não** remove o assento; só `DELETE /subscriptions/family-seat` (ou o fim da assinatura) o faz.
       x-rf: [RF-043]
       x-roles: [Owner]
       x-status: proposed
@@ -1567,9 +1621,20 @@ paths:
           application/json:
             schema:
               type: object
-              required: [membership_id]
+              description: Exatamente um entre `membership_id` e `email`.
               properties:
-                membership_id: { type: string, format: uuid }
+                membership_id:
+                  type: string
+                  format: uuid
+                  description: Cuidador existente (opcional; o adicional pode não ser cuidador).
+                email:
+                  type: string
+                  format: email
+                  description: E-mail do adicional, que não precisa ser cuidador de nenhum bebê.
+              oneOf:
+                - required: [membership_id]
+                - required: [email]
+              additionalProperties: false
       responses:
         '200':
           description: Assento atribuído.
@@ -1779,13 +1844,24 @@ paths:
       operationId: requestAccountDeletion
       summary: Solicitar exclusão da conta e dos dados
       description: |
-        Exige `X-Reauth-Token`. Encerra todas as sessões e agenda a purga conforme janela de arrependimento (D-07).
-        Para cada bebê em que o usuário é Owner **com outros cuidadores ativos**, `baby_decisions` é obrigatório
-        (`transfer_ownership` ou `delete_baby` com `acknowledge_other_caregivers=true`); caso contrário responde
-        `409 OWNER_DECISION_REQUIRED` listando os bebês. Nenhum dado de outros cuidadores é apagado sem esse aviso e
-        confirmação (ADR-0008, ponto aberto). Não cancela assinatura da loja.
+        **Somente o Owner** (titular) pode excluir a conta (ADR-0009, decisão 6): quem tem apenas vínculo de
+        Caregiver/ReadOnly recebe `403 FORBIDDEN_ROLE` (ver PA-27). Exige `X-Reauth-Token`. Encerra todas as sessões
+        e agenda a purga ao fim da **janela de arrependimento** (`scheduled_for`, cancelável com
+        `DELETE /me/deletion-request`).
+
+        A política vem da flag `account_deletion_policy` (`GET /reference-data` -> `policies`) e é devolvida em
+        `AccountDeletion.policy`:
+        - `cascade` (**padrão**, ADR-0009 substitui o `block` inicial): apaga os bebês do Owner **também para os
+          demais cuidadores**. Se houver outros cuidadores ativos, a requisição exige confirmação explícita
+          `acknowledge_other_caregivers=true` (a UI informa que os dados do bebê serão apagados para todos); sem ela
+          responde `409 OWNER_DECISION_REQUIRED` com `deletion_policy` e `babies_requiring_decision`.
+        - `block`: responde `409 OWNER_DECISION_REQUIRED` enquanto houver bebê com outros cuidadores ativos, até
+          o Owner transferir a propriedade ou excluir o bebê.
+        - `transfer_ownership`: `baby_decisions` com `action=transfer_ownership` e `new_owner_membership_id` para
+          cada bebê compartilhado.
+        Validação jurídica pendente (DJ-09). Não cancela assinatura da loja.
       x-rf: [RF-045, RF-055]
-      x-roles: [Any]
+      x-roles: [Owner]
       parameters:
         - $ref: '#/components/parameters/ReauthToken'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -1802,13 +1878,14 @@ paths:
               schema: { $ref: '#/components/schemas/AccountDeletion' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/IdempotencyKeyReuse' }
     delete:
       tags: [Privacy]
       operationId: cancelAccountDeletion
       summary: Cancelar exclusão dentro da janela de arrependimento
-      description: Disponível apenas se houver janela (D-07). O usuário entra de novo (login) antes de `scheduled_for`.
+      description: Janela de arrependimento mantida (ADR-0009, decisão 4). O usuário entra de novo (login) antes de `scheduled_for`.
       x-rf: [RF-045]
       x-roles: [Any]
       responses:
@@ -1864,8 +1941,10 @@ paths:
       summary: Valores permitidos e limites configuráveis
       description: |
         Conjuntos de valores (tipos de fralda, tipos de leite, métodos/locais de sono) e limites de validação
-        (volume máximo, tamanho de notas) vindos de configuração em banco (ADR-0005; D-08, D-22). O cliente usa
-        para montar a UI e validar localmente; o servidor valida sempre. Cacheável por `ETag`.
+        (volume máximo, tamanho de notas) vindos de configuração em banco (ADR-0005; D-08, D-22). Expõe também as
+        **políticas por flag** (`policies`: sono sobreposto, exclusão de conta, janela de idade corrigida). O cliente
+        usa para montar a UI e validar localmente; o servidor valida sempre. Os enums de fralda, alimentação e leite
+        são extensíveis: ignorar valores desconhecidos. Cacheável por `ETag`.
       x-rf: [RF-016, RF-018, RF-008]
       x-roles: [Any]
       responses:
@@ -2058,6 +2137,7 @@ components:
                 title: Decide the destination of shared babies
                 status: 409
                 code: OWNER_DECISION_REQUIRED
+                deletion_policy: cascade
                 babies_requiring_decision:
                   - 7d0a5c9e-1c0b-4d3a-b5f4-2f9d0e6a8b21
             alreadyMember:
@@ -2188,6 +2268,10 @@ components:
         babies_requiring_decision:
           type: array
           items: { type: string, format: uuid }
+        deletion_policy:
+          type: string
+          enum: [cascade, block, transfer_ownership]
+          description: Política de exclusão vigente em `OWNER_DECISION_REQUIRED`.
       additionalProperties: true
     FieldError:
       type: object
@@ -2450,15 +2534,36 @@ components:
         months:
           type: integer
           description: Meses completos.
+    AgeCalculation:
+      type: object
+      description: |
+        Cálculo canônico de idade (ADR-0009). Persistem-se apenas `birth_date` e `due_date`; **a idade corrigida
+        nunca é persistida**. `corrected_days = chronological_days - (due_date - birth_date)` somente se
+        `birth_date < due_date` e dentro da janela de aplicação (parâmetro editável em banco, ADR-0005).
+      required: [chronological_days, corrected_days, correction_applied]
+      properties:
+        chronological_days:
+          type: integer
+          minimum: 0
+          description: Dias desde `birth_date` até a data local do bebê.
+        corrected_days:
+          type: [integer, 'null']
+          description: Dias de idade corrigida. `null` = não se aplica (sem `due_date`, `birth_date >= due_date` ou fora da janela); nunca `0` para "não se aplica".
+        correction_applied:
+          type: boolean
+          description: '`true` se e somente se `corrected_days` não é nulo.'
     Age:
       type: object
-      description: Idades na data local do bebê, calculadas sob demanda e nunca persistidas (INV-04, RIC).
+      description: |
+        Decomposição em semanas e meses para exibição, na data local do bebê, calculada sob demanda e nunca
+        persistida (INV-04, RIC). A fonte canônica em dias é `Baby.age_calculation`; `corrected` é nulo
+        exatamente quando `age_calculation.corrected_days` é nulo.
       required: [as_of, chronological]
       properties:
         as_of: { type: string, format: date }
         chronological: { $ref: '#/components/schemas/AgeValue' }
         corrected:
-          description: Nulo quando não há DPP ou a correção não se aplica (política D-01 em aberto).
+          description: Nulo = correção não se aplica (ver `AgeCalculation`).
           oneOf:
             - $ref: '#/components/schemas/AgeValue'
             - type: 'null'
@@ -2489,6 +2594,7 @@ components:
           description: Reservado; upload fora do MVP (D-09).
         my_role: { $ref: '#/components/schemas/Role' }
         age: { $ref: '#/components/schemas/Age' }
+        age_calculation: { $ref: '#/components/schemas/AgeCalculation' }
         version: { type: integer, minimum: 1 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -2506,6 +2612,7 @@ components:
             chronological: { days: 271, weeks: 38, months: 8 }
             corrected: { days: 257, weeks: 36, months: 8 }
             displayed: chronological
+          age_calculation: { chronological_days: 271, corrected_days: 257, correction_applied: true }
           version: 3
           created_at: '2026-10-08T17:00:00Z'
           updated_at: '2026-10-08T17:10:00Z'
@@ -2598,6 +2705,31 @@ components:
     EventType:
       type: string
       enum: [sleep, feeding, pumping, diaper]
+    DiaperType:
+      type: string
+      enum: [WET, DIRTY, MIXED, DRY, UNSPECIFIED]
+      x-extensible-enum: true
+      description: |
+        Enum **extensível**: tolerar valores desconhecidos. `WET` = urina; `DIRTY` = fezes; `MIXED` = ambos;
+        `DRY` = verificada, sem urina nem fezes; `UNSPECIFIED` = usuário não especificou. `UNKNOWN` fica reservado
+        a migração de dados antigos.
+    FeedingType:
+      type: string
+      enum: [BREASTFEEDING, BOTTLE, SOLID, OTHER]
+      x-extensible-enum: true
+      description: 'Enum **extensível**: tolerar valores desconhecidos. Imutável após a criação (exclua e recrie).'
+    MilkType:
+      type: string
+      enum: [BREAST_MILK, FORMULA, MIXED, OTHER, UNSPECIFIED]
+      x-extensible-enum: true
+      description: |
+        Enum **extensível**: tolerar valores desconhecidos. `UNSPECIFIED` = usuário não especificou; `UNKNOWN` fica
+        reservado a migração de dados antigos. **Só se aplica quando `feeding_type=BOTTLE`**; nos demais tipos o
+        campo `milk_type` é `null` (não se aplica).
+    BreastSide:
+      type: string
+      enum: [LEFT, RIGHT, BOTH]
+      description: Lado da amamentação (ou da bomba).
     EventBase:
       type: object
       required: [event_type, id, baby_id, version, tz, created_at, updated_at, created_by, last_modified_by]
@@ -2639,6 +2771,12 @@ components:
             method_or_place: { type: [string, 'null'], maxLength: 80 }
             notes: { type: [string, 'null'], maxLength: 500 }
             source: { type: string, enum: [timer, manual] }
+            night_awakenings:
+              type: [integer, 'null']
+              readOnly: true
+              description: |
+                Derivado dos `WakeEvent` da sessão (nunca gravado). `null` = não se aplica (soneca) ou dados
+                insuficientes; `0` = acompanhamento suficiente e nenhum despertar; `N>0` = quantidade.
     FeedingSession:
       allOf:
         - $ref: '#/components/schemas/EventBase'
@@ -2646,21 +2784,27 @@ components:
           required: [feeding_type, start_at]
           properties:
             event_type: { const: feeding }
-            feeding_type: { type: string, enum: [breast, bottle] }
+            feeding_type: { $ref: '#/components/schemas/FeedingType' }
             start_at: { type: string, format: date-time }
-            end_at: { type: [string, 'null'], format: date-time }
+            end_at:
+              type: [string, 'null']
+              format: date-time
+              description: Obrigatório em `BREASTFEEDING` (PA-05 em aberto); opcional nos demais.
             duration_seconds: { type: [integer, 'null'], readOnly: true }
             side:
-              type: [string, 'null']
-              enum: [left, right, both, null]
-              description: Só em `breast`.
+              oneOf:
+                - $ref: '#/components/schemas/BreastSide'
+                - type: 'null'
+              description: Só em `BREASTFEEDING`; nos demais, `null` (não se aplica).
             volume_ml:
               type: [integer, 'null']
               minimum: 1
-              description: Só em `bottle`.
+              description: Só em `BOTTLE`; nos demais, `null` (não se aplica).
             milk_type:
-              type: [string, 'null']
-              description: 'Só em `bottle`; valores em /reference-data (D-08).'
+              oneOf:
+                - $ref: '#/components/schemas/MilkType'
+                - type: 'null'
+              description: 'Só em `BOTTLE`; nos demais tipos é `null` (não se aplica). Valores vigentes em /reference-data.'
             notes: { type: [string, 'null'], maxLength: 500 }
     PumpingSession:
       allOf:
@@ -2674,8 +2818,9 @@ components:
             duration_seconds: { type: integer, readOnly: true }
             volume_ml: { type: [integer, 'null'], minimum: 1 }
             side:
-              type: [string, 'null']
-              enum: [left, right, both, null]
+              oneOf:
+                - $ref: '#/components/schemas/BreastSide'
+                - type: 'null'
     DiaperEvent:
       allOf:
         - $ref: '#/components/schemas/EventBase'
@@ -2684,10 +2829,49 @@ components:
           properties:
             event_type: { const: diaper }
             occurred_at: { type: string, format: date-time }
-            diaper_type:
-              type: string
-              description: 'Valores em /reference-data (D-08); ex.: wet, dirty, mixed, dry.'
+            diaper_type: { $ref: '#/components/schemas/DiaperType' }
             notes: { type: [string, 'null'], maxLength: 500 }
+    WakeEvent:
+      type: object
+      description: |
+        Despertar durante uma sessão de sono (ADR-0009). **Fonte da verdade** de `night_awakenings`. Entidade
+        sincronizável (push/pull, `version`, tombstone) e com correção manual. Não aparece em `/timeline`.
+      required: [id, baby_id, sleep_session_id, started_at, ended_at, duration_seconds, source, version, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Gerado no cliente.
+        baby_id: { type: string, format: uuid }
+        sleep_session_id: { type: string, format: uuid }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        duration_seconds:
+          type: integer
+          minimum: 0
+          readOnly: true
+          description: Derivada de `started_at` e `ended_at`.
+        source:
+          type: string
+          enum: [MANUAL, INFERRED, IMPORT]
+          description: '`MANUAL` informado/corrigido por cuidador; `INFERRED` deduzido pelo servidor; `IMPORT` vindo de importação.'
+        version:
+          type: integer
+          minimum: 1
+          description: Versão da entidade, atribuída só pelo servidor.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      examples:
+        - id: 4c1b7d52-9a0e-4f3b-8d21-5e6f7a8b9c0d
+          baby_id: 7d0a5c9e-1c0b-4d3a-b5f4-2f9d0e6a8b21
+          sleep_session_id: 0b8f1a52-6f3e-4a0c-8f86-6c3d7a3c1a10
+          started_at: '2026-10-08T05:10:00Z'
+          ended_at: '2026-10-08T05:25:00Z'
+          duration_seconds: 900
+          source: MANUAL
+          version: 1
+          created_at: '2026-10-08T08:00:00Z'
+          updated_at: '2026-10-08T08:00:00Z'
     Event:
       oneOf:
         - $ref: '#/components/schemas/SleepSession'
@@ -2729,7 +2913,7 @@ components:
       description: Cursor **opaco**. O cliente nunca interpreta, ordena nem compara. Não é intercambiável entre bebês.
     SyncEntityType:
       type: string
-      enum: [sleep_session, feeding_session, pumping_session, diaper_event]
+      enum: [sleep_session, feeding_session, pumping_session, diaper_event, wake_event]
     SleepData:
       type: object
       description: Dados de criação de `sleep_session`.
@@ -2745,13 +2929,15 @@ components:
       additionalProperties: false
     BreastFeedingData:
       type: object
-      description: Dados de criação de `feeding_session` com `feeding_type=breast`.
+      description: |
+        Dados de criação de `feeding_session` com `feeding_type=BREASTFEEDING`. `end_at` é obrigatório no MVP
+        (ADR-0009, decisão 3; ponto aberto PA-05: reabrir se o timer de mamada precisar ser compartilhado).
       required: [feeding_type, side, start_at, end_at, tz]
       properties:
         feeding_type:
           type: string
-          const: breast
-        side: { type: string, enum: [left, right, both] }
+          const: BREASTFEEDING
+        side: { $ref: '#/components/schemas/BreastSide' }
         start_at: { type: string, format: date-time }
         end_at: { type: string, format: date-time }
         tz: { type: string }
@@ -2759,16 +2945,35 @@ components:
       additionalProperties: false
     BottleFeedingData:
       type: object
-      description: Dados de criação de `feeding_session` com `feeding_type=bottle`.
+      description: Dados de criação de `feeding_session` com `feeding_type=BOTTLE`.
       required: [feeding_type, start_at, volume_ml, tz]
       properties:
         feeding_type:
           type: string
-          const: bottle
+          const: BOTTLE
         start_at: { type: string, format: date-time }
         end_at: { type: [string, 'null'], format: date-time }
         volume_ml: { type: integer, minimum: 1 }
-        milk_type: { type: [string, 'null'] }
+        milk_type:
+          description: Único tipo de alimentação em que `milk_type` se aplica; `null` = não informado.
+          oneOf:
+            - $ref: '#/components/schemas/MilkType'
+            - type: 'null'
+        tz: { type: string }
+        notes: { type: [string, 'null'], maxLength: 500 }
+      additionalProperties: false
+    OtherFeedingData:
+      type: object
+      description: |
+        Dados de criação de `feeding_session` com `feeding_type` `SOLID` ou `OTHER`. `milk_type`, `side` e
+        `volume_ml` não se aplicam (omitidos ou `null`).
+      required: [feeding_type, start_at, tz]
+      properties:
+        feeding_type:
+          type: string
+          enum: [SOLID, OTHER]
+        start_at: { type: string, format: date-time }
+        end_at: { type: [string, 'null'], format: date-time }
         tz: { type: string }
         notes: { type: [string, 'null'], maxLength: 500 }
       additionalProperties: false
@@ -2781,8 +2986,9 @@ components:
         end_at: { type: string, format: date-time }
         volume_ml: { type: [integer, 'null'], minimum: 1 }
         side:
-          type: [string, 'null']
-          enum: [left, right, both, null]
+          oneOf:
+            - $ref: '#/components/schemas/BreastSide'
+            - type: 'null'
         tz: { type: string }
       additionalProperties: false
     DiaperData:
@@ -2791,9 +2997,22 @@ components:
       required: [occurred_at, diaper_type, tz]
       properties:
         occurred_at: { type: string, format: date-time }
-        diaper_type: { type: string }
+        diaper_type: { $ref: '#/components/schemas/DiaperType' }
         tz: { type: string }
         notes: { type: [string, 'null'], maxLength: 500 }
+      additionalProperties: false
+    WakeEventData:
+      type: object
+      description: Dados de criação de `wake_event`. `sleep_session_id` deve existir e pertencer ao mesmo bebê.
+      required: [sleep_session_id, started_at, ended_at]
+      properties:
+        sleep_session_id: { type: string, format: uuid }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        source:
+          type: string
+          enum: [MANUAL, INFERRED, IMPORT]
+          default: MANUAL
       additionalProperties: false
     EventPatch:
       type: object
@@ -2809,11 +3028,28 @@ components:
         method_or_place: { type: [string, 'null'], maxLength: 80 }
         notes: { type: [string, 'null'], maxLength: 500 }
         side:
-          type: [string, 'null']
-          enum: [left, right, both, null]
+          oneOf:
+            - $ref: '#/components/schemas/BreastSide'
+            - type: 'null'
         volume_ml: { type: [integer, 'null'], minimum: 1 }
-        milk_type: { type: [string, 'null'] }
-        diaper_type: { type: string }
+        milk_type:
+          description: Só em `BOTTLE`.
+          oneOf:
+            - $ref: '#/components/schemas/MilkType'
+            - type: 'null'
+        diaper_type: { $ref: '#/components/schemas/DiaperType' }
+        started_at:
+          type: string
+          format: date-time
+          description: Só em `wake_event`.
+        ended_at:
+          type: string
+          format: date-time
+          description: Só em `wake_event` (em `sleep_session`/mamada/bomba o campo é `end_at`).
+        source:
+          type: string
+          enum: [MANUAL, INFERRED, IMPORT]
+          description: Só em `wake_event` (correção manual marca `MANUAL`).
       additionalProperties: false
       minProperties: 1
     MutationBase:
@@ -2850,8 +3086,10 @@ components:
                 - $ref: '#/components/schemas/SleepData'
                 - $ref: '#/components/schemas/BreastFeedingData'
                 - $ref: '#/components/schemas/BottleFeedingData'
+                - $ref: '#/components/schemas/OtherFeedingData'
                 - $ref: '#/components/schemas/PumpingData'
                 - $ref: '#/components/schemas/DiaperData'
+                - $ref: '#/components/schemas/WakeEventData'
     UpdateMutation:
       allOf:
         - $ref: '#/components/schemas/MutationBase'
@@ -2895,7 +3133,8 @@ components:
       description: |
         `none` sem conflito; `merged` campos disjuntos combinados; `lww_client_won` / `lww_server_won` campo em
         conflito decidido por last-write-wins; `delete_wins` exclusão concorrente prevaleceu (D-36); `kept_both` sono
-        sobreposto preservado e sinalizado (D-05).
+        sobreposto preservado e sinalizado (política `accept_and_warn`, ADR-0009). Com a política `reject`, o
+        sobreposto vira `rejected` com `problem.code=SLEEP_OVERLAP`.
       enum: [none, merged, lww_client_won, lww_server_won, delete_wins, kept_both]
     FieldConflict:
       type: object
@@ -2937,6 +3176,7 @@ components:
           description: Estado canônico quando `resolution != none` ou `duplicate` (o cliente reconcilia sem novo pull).
           oneOf:
             - $ref: '#/components/schemas/Event'
+            - $ref: '#/components/schemas/WakeEvent'
             - type: 'null'
         retryable:
           type: boolean
@@ -2952,7 +3192,7 @@ components:
           items: { $ref: '#/components/schemas/MutationResult' }
     PullEntityType:
       type: string
-      enum: [baby, sleep_session, feeding_session, pumping_session, diaper_event, sleep_preferences, sleep_prediction]
+      enum: [baby, sleep_session, feeding_session, pumping_session, diaper_event, wake_event, sleep_preferences, sleep_prediction]
     PullChange:
       type: object
       required: [op, entity_type, entity_id, version]
@@ -2966,6 +3206,7 @@ components:
           oneOf:
             - $ref: '#/components/schemas/Baby'
             - $ref: '#/components/schemas/Event'
+            - $ref: '#/components/schemas/WakeEvent'
             - $ref: '#/components/schemas/SleepPreferences'
             - $ref: '#/components/schemas/SleepPrediction'
         deleted_at:
@@ -3068,12 +3309,14 @@ components:
     # ------------------------------------------------------------- charts
     SummaryMetrics:
       type: object
-      description: Médias por dia (em `summary`) ou diferenças absolutas (em `deltas`). Nulo = sem dados.
+      description: Médias por dia (em `summary`) ou diferenças absolutas (em `deltas`). Nulo = sem dados (indisponível); `0` = zero conhecido.
       properties:
         days_counted: { type: integer }
         sleep_total_minutes_avg: { type: [number, 'null'] }
         nap_count_avg: { type: [number, 'null'] }
-        night_wakings_avg: { type: [number, 'null'] }
+        night_awakenings_avg:
+          type: [number, 'null']
+          description: Média diária derivada de `WakeEvent`. `null` = dados insuficientes; `0` = acompanhamento suficiente sem despertar.
         feeding_count_avg: { type: [number, 'null'] }
         bottle_volume_ml_avg: { type: [number, 'null'] }
         pumping_volume_ml_avg: { type: [number, 'null'] }
@@ -3097,9 +3340,11 @@ components:
             night_minutes: { type: integer }
             nap_minutes: { type: integer }
             nap_count: { type: integer }
-            night_wakings:
+            night_awakenings:
               type: [integer, 'null']
-              description: Nulo até D-12 ser decidido.
+              description: |
+                Derivado de `WakeEvent` (ADR-0009), nunca gravado. `null` = dados insuficientes; `0` =
+                acompanhamento suficiente e nenhum despertar; `N>0` = quantidade.
             wake_window_minutes:
               type: [object, 'null']
               properties:
@@ -3267,10 +3512,21 @@ components:
           items: { $ref: '#/components/schemas/Feature' }
         seats:
           type: [object, 'null']
-          description: Assentos do plano familiar (proposta, ADR-0005/D-04).
+          description: Assentos do plano familiar (proposta, ADR-0005/D-04; ADR-0009).
           properties:
             total: { type: integer }
             used: { type: integer }
+            additional:
+              type: [object, 'null']
+              description: Titular do assento adicional, que **não precisa ser cuidador ativo** de um bebê. `null` = assento livre.
+              properties:
+                membership_id:
+                  type: [string, 'null']
+                  format: uuid
+                  description: Nulo quando o adicional não é cuidador.
+                email_masked: { type: [string, 'null'] }
+                status: { type: string, enum: [pending, active] }
+                is_caregiver: { type: boolean }
     PurchaseRequest:
       type: object
       required: [store, product_id]
@@ -3385,7 +3641,13 @@ components:
         acknowledge_store_subscription:
           type: boolean
           description: Ciência de que a assinatura da loja não é cancelada.
+        acknowledge_other_caregivers:
+          type: boolean
+          description: |
+            Confirmação explícita de que os dados do bebê serão apagados **também para os outros cuidadores**.
+            Obrigatória (`true`) na política `cascade` quando algum bebê do Owner tem outros cuidadores ativos.
         baby_decisions:
+          description: Obrigatório só nas políticas `block` e `transfer_ownership` para bebês compartilhados.
           type: array
           items:
             type: object
@@ -3401,11 +3663,15 @@ components:
       properties:
         id: { type: string, format: uuid }
         status: { type: string, enum: [requested, scheduled, cancelled, completed] }
+        policy:
+          type: string
+          enum: [cascade, block, transfer_ownership]
+          description: Política aplicada (flag `account_deletion_policy`). Padrão `cascade`.
         requested_at: { type: string, format: date-time }
         scheduled_for:
           type: [string, 'null']
           format: date-time
-          description: Fim da janela de arrependimento (D-07).
+          description: Fim da janela de arrependimento (ADR-0009, decisão 4).
         completed_at: { type: [string, 'null'], format: date-time }
     AuditEvent:
       type: object
@@ -3438,21 +3704,48 @@ components:
     # ---------------------------------------------------------- reference
     ReferenceData:
       type: object
-      required: [version, diaper_types, milk_types, sleep_methods, limits]
+      required: [version, diaper_types, feeding_types, milk_types, sleep_methods, policies, limits]
       properties:
         version: { type: string }
         diaper_types:
           type: array
-          items: { type: string }
+          description: Valores vigentes de `DiaperType` (extensível).
+          items: { $ref: '#/components/schemas/DiaperType' }
+        feeding_types:
+          type: array
+          description: Valores vigentes de `FeedingType` (extensível).
+          items: { $ref: '#/components/schemas/FeedingType' }
         milk_types:
           type: array
-          items: { type: string }
+          description: Valores vigentes de `MilkType` (extensível); só se aplicam a `BOTTLE`.
+          items: { $ref: '#/components/schemas/MilkType' }
         sleep_methods:
           type: array
           items: { type: string }
+        policies:
+          type: object
+          description: Comportamentos governados por flag em banco (ADR-0005/0009). O cliente apenas os reflete.
+          required: [sleep_overlap_policy, account_deletion_policy]
+          properties:
+            sleep_overlap_policy:
+              type: string
+              enum: [accept_and_warn, reject]
+              description: Padrão `accept_and_warn` (aceita e sinaliza com `SLEEP_OVERLAP`); `reject` rejeita a mutação.
+            account_deletion_policy:
+              type: string
+              enum: [cascade, block, transfer_ownership]
+              description: Padrão `cascade`.
+            corrected_age_max_months:
+              type: [integer, 'null']
+              description: Janela de aplicação da idade corrigida (parâmetro editável, ADR-0005). `null` = sem limite definido.
         limits:
           type: object
           properties:
+            night_awakenings_min_coverage_percent:
+              type: integer
+              minimum: 0
+              maximum: 100
+              description: Critério mínimo de acompanhamento para `night_awakenings` deixar de ser `null` (parâmetro editável; valor a definir).
             bottle_volume_ml_max: { type: integer }
             pumping_volume_ml_max: { type: integer }
             notes_max_length: { type: integer }
