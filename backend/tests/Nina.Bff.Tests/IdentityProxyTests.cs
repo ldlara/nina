@@ -191,6 +191,21 @@ public sealed class IdentityProxyTests
     }
 
     [Fact]
+    public async Task Responses_carry_security_headers_and_no_server_banner()
+    {
+        var handler = new RecordingHandler(_ => Json(HttpStatusCode.OK, "{}"));
+        using var factory = Create(handler);
+        using var client = factory.CreateClient();
+
+        using var response = await client.GetAsync(new Uri("/v1/legal/documents", UriKind.Relative), CancellationToken.None);
+
+        Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
+        Assert.Equal("no-store", response.Headers.GetValues("Cache-Control").Single());
+        Assert.Equal("DENY", response.Headers.GetValues("X-Frame-Options").Single());
+        Assert.Contains("default-src 'none'", response.Headers.GetValues("Content-Security-Policy").Single(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Health_and_ready_endpoints_still_work()
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));

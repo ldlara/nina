@@ -9,4 +9,7 @@
     <ProjectReference Include="..\Modules\Nina.Subscriptions\Nina.Subscriptions.csproj" />
     <ProjectReference Include="..\Modules\Nina.Privacy\Nina.Privacy.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Nina.Api.Tests" />
+  </ItemGroup>
 </Project>
