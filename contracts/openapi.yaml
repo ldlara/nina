@@ -3958,7 +3958,7 @@ components:
               type: string
               format: date
               description: Inclusive.
-        tz: { $ref: '#/components/schemas/TimeZoneId' }
+        tz: { type: string }
         granularity: { type: string, enum: [HOUR, DAY] }
         generated_at: { type: string, format: date-time }
         buckets:
