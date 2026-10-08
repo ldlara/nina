@@ -1,5 +1,6 @@
 package app.nina.ui
 
+import app.nina.R
 import app.cash.turbine.test
 import app.nina.domain.model.AppError
 import app.nina.domain.model.InvitableRole

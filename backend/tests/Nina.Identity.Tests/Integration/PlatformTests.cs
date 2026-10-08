@@ -109,7 +109,7 @@ public sealed class PlatformTests(PostgresFixture postgres) : IntegrationTestBas
         var notFound = await Api.GetAsync("/v1/does-not-exist");
         var malformed = await Api.SendAsync(HttpMethod.Post, "/v1/auth/login", null, tweak: r =>
             r.Content = new StringContent("{ not json", Encoding.UTF8, "application/json"));
-        var echoed = await Api.GetAsync("/v1/me", tweak: null);
+        var echoed = await Api.GetAsync("/v1/me");
 
         Assert.Equal(HttpStatusCode.NotFound, notFound.Status);
         Assert.True(notFound.IsProblem);

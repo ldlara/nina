@@ -1,5 +1,6 @@
 package app.nina.ui
 
+import app.nina.R
 import app.cash.turbine.test
 import app.nina.domain.auth.SocialAuthResult
 import app.nina.domain.auth.SocialCredential
