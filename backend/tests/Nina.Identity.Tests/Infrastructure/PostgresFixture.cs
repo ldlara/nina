@@ -43,7 +43,13 @@ public sealed class PostgresFixture : IAsyncLifetime
 
         var migrations = MigrationRunner.FindDefaultDirectory(AppContext.BaseDirectory)
                          ?? throw new InvalidOperationException("backend/db/migrations não encontrado");
-        await new MigrationRunner(AdminConnectionString("nina_template"), migrations).ApplyAsync(CancellationToken.None);
+        var runner = new MigrationRunner(AdminConnectionString("nina_template"), migrations);
+        await runner.ApplyAsync(CancellationToken.None);
+        // NR-03/NR-09: o migrator/dono instala a chave de assinatura servidor-banco. Mesma derivação de ServerMac.Key (SecretKeys.Derive("db-mac")):
+        // HMAC-SHA256(Security:MasterKey, "nina.v1:db-mac"), com a MasterKey que o ApiFactory configura.
+        var serverKey = System.Security.Cryptography.HMACSHA256.HashData(
+            Convert.FromBase64String(TestConstants.MasterKey), System.Text.Encoding.UTF8.GetBytes("nina.v1:db-mac"));
+        await runner.ProvisionServerKeyAsync(serverKey, CancellationToken.None);
 
         await using var superuser = new NpgsqlConnection(AdminConnectionString("nina_template"));
         await superuser.OpenAsync();
