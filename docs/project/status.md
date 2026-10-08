@@ -1,3 +1,5 @@
 - Decisões de 2026-10-08 registradas: ADR-0003 aceita (change log, sync_sequence, cursor opaco, tombstones 90 dias), ADR-0005 (flags/entitlements em banco, premium por família), ADR-0006 (Docker + OpenShift), ADR-0007 (senha, Google, Apple), ADR-0008 (exclusão recursiva, com ponto aberto).
 - Ainda abertas: provedor de push; significado exato de "um adicional" no premium; exclusão do Owner com outros cuidadores; governança da hospedagem ("Shadow IT"); revisão jurídica DJ-01..13.
-- Próximo: Onda 2 (ARCH-001/003, DB-001, API-001, CLOUD-001, SEC-001).
+- Onda 2 (parcial): CLOUD-001/SEC-001 feito (esqueleto .NET, CI, OpenShift; build/test verdes), DB-001 feito (`specs/database-spec.md`, `backend/db/migrations/0001_init.sql`, validado em PostgreSQL 16), API-001 feito (`contracts/openapi.yaml`, `specs/api-spec.md`; 66 operações; lint e validator OK). Contrato ainda NÃO congelado: depende das confirmações abaixo.
+- Confirmações pendentes (decisão do usuário): entidade `family`; quem edita perfil do bebê; adicional do premium precisa ser cuidador ativo; cadastro com verificação de e-mail (PA-01); escrita de eventos só via /sync/push; PA-05 (mamada sem end_at); janela de arrependimento da exclusão; exclusão do Owner com cuidadores (ADR-0008).
+- Próximo: congelar contrato, ARCH-003 (spike de sync), SECURITY-REVIEW do esqueleto, depois Onda 3 (Identity/Family + apps).
