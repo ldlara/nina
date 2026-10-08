@@ -29,11 +29,10 @@ public sealed class ClientIpEndToEndTests : IAsyncDisposable
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Configuration["Internal:SharedSecret"] = Secret;
-        builder.Services.AddOptions<InternalOptions>().Bind(builder.Configuration.GetSection(InternalOptions.SectionName));
+        builder.Services.AddOptions<Nina.SharedKernel.Http.InternalOptions>().Bind(builder.Configuration.GetSection("Internal"));
         builder.Services.AddSingleton<IRateLimiter>(new InMemoryRateLimiter(TimeProvider.System));
         var app = builder.Build();
         app.UseMiddleware<InternalClientIpMiddleware>();
-        app.Use((c, n) => { Console.Error.WriteLine("DBG " + c.Connection.RemoteIpAddress + " opts=" + c.RequestServices.GetRequiredService<Microsoft.Extensions.Options.IOptions<InternalOptions>>().Value.SharedSecret); return n(c); });
 
         // Réplica mínima do limite de AuthService: login:ip:{ip}, 3 tentativas por janela (o real é 30 falhas/15 min).
         app.MapPost("/v1/auth/login", (HttpContext context, IRateLimiter limiter) =>
