@@ -171,7 +171,7 @@ public abstract class TrackingTestBase(PostgresFixture postgres) : IAsyncLifetim
         {
             var page = await PullAsync(s, baby, current, limit);
             Assert.Equal(System.Net.HttpStatusCode.OK, page.Status);
-            OpenApiContract.AssertValid("PullResponse", page.Json);              // teste de contrato: toda página de pull confere com o OpenAPI
+            OpenApiContract.AssertPullResponse(page.Json);              // teste de contrato: toda página de pull confere com o OpenAPI
             foreach (var c in page.Json!["changes"]!.AsArray())
             {
                 changes.Add(c!.DeepClone());

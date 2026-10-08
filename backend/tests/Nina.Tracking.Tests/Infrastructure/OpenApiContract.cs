@@ -34,6 +34,50 @@ public static partial class OpenApiContract
         Assert.True(errors.Count == 0, $"resposta fora do contrato {schema} (openapi {Version}):\n  " + string.Join("\n  ", errors.Take(12)));
     }
 
+    /// <summary>
+    /// <c>PullResponse</c>: o <c>oneOf</c> de <c>PullChange.entity</c> não é exclusivo em JSON Schema (um <c>Event</c> também satisfaz
+    /// <c>SleepPreferences</c>, que só exige <c>baby_id</c>, <c>version</c> e <c>updated_at</c>), então o <c>entity</c> é validado contra o esquema
+    /// que o <c>entity_type</c> da própria mudança determina; o restante da resposta é validado normalmente.
+    /// </summary>
+    public static void AssertPullResponse(JsonNode? response)
+    {
+        var original = response!["changes"]!.AsArray();
+        var clone = response.DeepClone();
+        var stripped = clone["changes"]!.AsArray();
+        var typed = new List<(string Type, JsonNode? Entity)>();
+        for (var i = 0; i < stripped.Count; i++)
+        {
+            var obj = stripped[i]!.AsObject();
+            var source = original[i]!.AsObject();
+            obj.Remove("entity");
+            if (obj["op"]!.GetValue<string>() == "UPSERT")
+            {
+                Assert.True(source.ContainsKey("entity"), "UPSERT sem entity");
+                typed.Add((obj["entity_type"]!.GetValue<string>(), source["entity"]));
+            }
+            else
+            {
+                Assert.False(source.ContainsKey("entity"), "TOMBSTONE não pode trazer conteúdo");
+                Assert.NotNull(obj["deleted_at"]);
+            }
+        }
+
+        AssertValid("PullResponse", clone);
+        foreach (var (type, entity) in typed)
+        {
+            AssertValid(
+                type switch
+                {
+                    "BABY" => "Baby",
+                    "WAKE_EVENT" => "WakeEvent",
+                    "SLEEP_PREFERENCES" => "SleepPreferences",
+                    "SLEEP_PREDICTION" => "SleepPrediction",
+                    _ => "Event",
+                },
+                entity);
+        }
+    }
+
     public static IReadOnlyList<string> Errors(string schema, JsonNode? instance)
     {
         var errors = new List<string>();
