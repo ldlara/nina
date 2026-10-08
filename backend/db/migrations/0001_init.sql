@@ -1900,22 +1900,56 @@ BEGIN
    WHERE p_baby = ANY (e.baby_ids) AND e.file_ref IS NOT NULL;
   UPDATE nina.data_export_request SET status = 'EXPIRED', file_ref = NULL
    WHERE p_baby = ANY (baby_ids) AND (file_ref IS NOT NULL OR status IN ('REQUESTED', 'PROCESSING'));
+  -- NR-07: TODOS os vinculos (inclusive o do Owner) sao encerrados; o check de INV-09 ignora bebe excluido e a casca fica ilegivel
+  -- (baby_role/readable_babies ignoram bebe com deleted_at).
   PERFORM nina.guard_arm('membership');
   UPDATE nina.caregiver_membership
      SET status = 'REVOKED', revoked_at = now(), revoked_reason = 'BABY_DELETED',
          invited_email = NULL, invite_token_hash = NULL
-   WHERE baby_id = p_baby AND status IN ('PENDING', 'ACTIVE')
-     AND NOT (role = 'OWNER');                            -- Owner fica ate o fim (check de INV-09 ignora bebe excluido)
+   WHERE baby_id = p_baby AND status IN ('PENDING', 'ACTIVE');
   PERFORM nina.guard_disarm('membership');
+  PERFORM nina.guard_arm('baby_delete');
   UPDATE nina.baby
      SET deleted_at = now(), display_name = NULL, birth_date = NULL, due_date = NULL,
          sex = NULL, photo_ref = NULL, field_versions = '{}'::jsonb, last_modified_by = p_actor
    WHERE id = p_baby;                                     -- triggers: version, change_log 'DELETE', tombstone
+  PERFORM nina.guard_disarm('baby_delete');
   INSERT INTO nina.erasure_ledger (entity_type, entity_id) VALUES ('BABY', p_baby) ON CONFLICT DO NOTHING;
   INSERT INTO nina.audit_event (actor_user_id, action, entity_type, entity_id, baby_id, is_critical)
   VALUES (p_actor, 'baby.erased', 'BABY', p_baby, p_baby, true);
   INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type)
   VALUES ('BABY', p_baby, 'BabyDeleted');
+END $$;
+
+-- Exclusao de bebe pelo Owner (NR-07, contrato 1.0.1: DELETE /babies/{id}). UNICO caminho do app: reautenticacao BABY_DELETE comprovada e
+-- vinculada ao bebe, reconhecimento explicito quando ha outros cuidadores ativos, auditoria com o jti (hash) e aviso a todos os
+-- cuidadores ativos (e ao Owner) pelo outbox, e so entao o apagamento (erase_baby). O UPDATE direto de baby.deleted_at e negado
+-- (coluna fora do GRANT + gatilho NN052). A exclusao continua IMEDIATA (a janela de arrependimento e decisao de produto, V2-05).
+CREATE FUNCTION nina.delete_baby(p_baby uuid, p_reauth_jti_hash bytea, p_acknowledge_others boolean DEFAULT false) RETURNS void
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
+DECLARE v_user uuid := nina.current_user_id(); v_others integer;
+BEGIN
+  IF v_user IS NULL OR NOT EXISTS (SELECT 1 FROM nina.caregiver_membership m JOIN nina.baby b ON b.id = m.baby_id AND b.deleted_at IS NULL
+                                    WHERE m.baby_id = p_baby AND m.user_id = v_user AND m.role = 'OWNER' AND m.status = 'ACTIVE') THEN
+    RAISE EXCEPTION 'vinculo inexistente ou sem permissao' USING ERRCODE = 'NN059';        -- uniforme: bebe alheio, inexistente ou sem ser Owner
+  END IF;
+  PERFORM 1 FROM nina.baby WHERE id = p_baby AND deleted_at IS NULL FOR UPDATE;
+  SELECT count(*) INTO v_others FROM nina.caregiver_membership m WHERE m.baby_id = p_baby AND m.status = 'ACTIVE' AND m.user_id <> v_user;
+  IF v_others > 0 AND NOT coalesce(p_acknowledge_others, false) THEN
+    RAISE EXCEPTION 'OWNER_DECISION_REQUIRED: o bebe tem outros cuidadores ativos; confirme explicitamente (acknowledge_other_caregivers)' USING ERRCODE = 'NN007';
+  END IF;
+  IF NOT nina.reauth_bind(p_reauth_jti_hash, 'BABY_DELETE', 'BABY', p_baby) THEN
+    RAISE EXCEPTION 'REAUTH_REQUIRED: exclusao do bebe exige reautenticacao comprovada' USING ERRCODE = 'NN014';
+  END IF;
+  INSERT INTO nina.audit_event (actor_user_id, action, entity_type, entity_id, baby_id, metadata_safe, is_critical)
+  VALUES (v_user, 'baby.deleted_by_owner', 'BABY', p_baby, p_baby,
+          jsonb_build_object('other_active_members', v_others, 'jti', encode(p_reauth_jti_hash, 'hex')), true);
+  IF v_others > 0 THEN    -- SR-016: o Owner e TODOS os cuidadores ativos sao avisados (o worker envia; o outbox nao leva PII)
+    INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type, payload)
+    SELECT 'USER', m.user_id, 'SharedBabyDeletedNotice', jsonb_build_object('baby_id', p_baby)
+      FROM nina.caregiver_membership m WHERE m.baby_id = p_baby AND m.status = 'ACTIVE';
+  END IF;
+  PERFORM nina.erase_baby(p_baby, v_user);
 END $$;
 
 -- E o Owner ativo de ao menos um bebe vivo? (so ele exclui a conta - ADR-0010 item 3)

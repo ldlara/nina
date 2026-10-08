@@ -134,6 +134,7 @@ public sealed class InternalClientIpTests
             builder.Services.AddSingleton<ISessionValidator, AlwaysActiveValidator>();
         }
 
+        builder.ConfigureContainer(new DefaultServiceProviderFactory(new ServiceProviderOptions { ValidateScopes = false, ValidateOnBuild = false }));
         var host = builder.Build();
         try
         {
