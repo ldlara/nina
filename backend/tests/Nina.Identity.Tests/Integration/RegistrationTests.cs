@@ -319,26 +319,80 @@ public sealed class RegistrationTests(PostgresFixture postgres) : IntegrationTes
     }
 
     [Fact]
-    public async Task Reregistering_before_confirmation_replaces_password_and_invalidates_the_old_code()
+    public async Task NR08_reregistering_before_confirmation_never_replaces_the_credential_and_only_resends_a_code()
     {
+        // O cenario do reteste: a vitima V se cadastra com pV; depois o atacante A cadastra o MESMO e-mail com pA.
+        const string victimPassword = "victim-long-password-1";
+        const string attackerPassword = "attacker-long-password-2";
         var email = ApiClient.NewEmail();
-        await Api.PostAsync("/v1/auth/register", RegisterBody(email));
+        var first = await Api.PostAsync("/v1/auth/register", RegisterBody(email, victimPassword));
         var oldCode = Api.LastCode(email);
+        var originalHash = await AdminScalarAsync<string>("SELECT c.password_hash FROM nina.user_credential c JOIN nina.app_user u ON u.id = c.user_id WHERE u.email_normalized = @e", new NpgsqlParameter("e", email));
+        var consents = await AdminScalarAsync<long>("SELECT count(*) FROM nina.consent_record r JOIN nina.app_user u ON u.id = r.user_id WHERE u.email_normalized = @e", new NpgsqlParameter("e", email));
 
-        // Dentro do intervalo de reenvio nada muda (nem novo e-mail).
+        // Dentro do intervalo de reenvio nada muda (nem novo e-mail), com resposta identica.
         var sent = Factory.Mailer.Sent.Count;
-        await Api.PostAsync("/v1/auth/register", RegisterBody(email, "another-long-password-1"));
+        var early = await Api.PostAsync("/v1/auth/register", RegisterBody(email, attackerPassword));
         Assert.Equal(sent, Factory.Mailer.Sent.Count);
+        Assert.Equal(first.Json!.ToJsonString(), early.Json!.ToJsonString());
 
         Factory.Time.Advance(TimeSpan.FromSeconds(61));
-        await Api.PostAsync("/v1/auth/register", RegisterBody(email, "another-long-password-2"));
+        var late = await Api.PostAsync("/v1/auth/register", RegisterBody(email, attackerPassword));
         var newCode = Api.LastCode(email);
+        Assert.Equal(HttpStatusCode.Accepted, late.Status);
+        Assert.Equal(first.Status, late.Status);
+        Assert.Equal(first.Json.ToJsonString(), late.Json!.ToJsonString());
+        Assert.Equal(sent + 1, Factory.Mailer.Sent.Count);                                  // um codigo novo para o dono da caixa postal
 
+        // A credencial (e os consentimentos) da conta nao verificada continuam os de V
+        Assert.Equal(originalHash, await AdminScalarAsync<string>("SELECT c.password_hash FROM nina.user_credential c JOIN nina.app_user u ON u.id = c.user_id WHERE u.email_normalized = @e", new NpgsqlParameter("e", email)));
+        Assert.Equal(consents, await AdminScalarAsync<long>("SELECT count(*) FROM nina.consent_record r JOIN nina.app_user u ON u.id = r.user_id WHERE u.email_normalized = @e", new NpgsqlParameter("e", email)));
+        Assert.Equal(1, await AdminScalarAsync<long>("SELECT count(*) FROM nina.app_user WHERE email_normalized = @e", new NpgsqlParameter("e", email)));
+
+        // O codigo antigo foi invalidado; V confirma com o novo e entra com a SUA senha. A senha do atacante nunca vale.
         var stale = await Api.PostAsync("/v1/auth/email/verify", new JsonObject { ["email"] = email, ["code"] = oldCode, ["device"] = ApiClient.Device() });
         Assert.Equal(HttpStatusCode.Unauthorized, stale.Status);
         await Api.VerifyAsync(email, newCode);
-        await Api.LoginAsync(email, "another-long-password-2");
-        var oldPassword = await Api.PostAsync("/v1/auth/login", new JsonObject { ["email"] = email, ["password"] = TestConstants.GoodPassword, ["device"] = ApiClient.Device() });
-        Assert.Equal(HttpStatusCode.Unauthorized, oldPassword.Status);
+        await Api.LoginAsync(email, victimPassword);
+        var attacker = await Api.PostAsync("/v1/auth/login", new JsonObject { ["email"] = email, ["password"] = attackerPassword, ["device"] = ApiClient.Device() });
+        Assert.Equal(HttpStatusCode.Unauthorized, attacker.Status);
+    }
+
+    [Fact]
+    public async Task NR09_the_verification_code_lives_in_email_verification_code_and_never_in_recovery_request()
+    {
+        var email = ApiClient.NewEmail();
+        await Api.PostAsync("/v1/auth/register", RegisterBody(email));
+        Assert.Equal(1, await AdminScalarAsync<long>("SELECT count(*) FROM nina.email_verification_code c JOIN nina.app_user u ON u.id = c.user_id WHERE u.email_normalized = @e AND c.used_at IS NULL AND c.invalidated_at IS NULL", new NpgsqlParameter("e", email)));
+        Assert.Equal(0, await AdminScalarAsync<long>("SELECT count(*) FROM nina.recovery_request"));
+
+        // 3 erros: contador PERSISTENTE no banco (nao em memoria); depois o codigo certo confirma e marca o e-mail como verificado so por aqui
+        for (var i = 0; i < 3; i++)
+        {
+            await Api.PostAsync("/v1/auth/email/verify", new JsonObject { ["email"] = email, ["code"] = "00000000" == Api.LastCode(email) ? "11111111" : "00000000", ["device"] = ApiClient.Device() });
+        }
+
+        Assert.Equal(3, await AdminScalarAsync<short>("SELECT c.attempts FROM nina.email_verification_code c JOIN nina.app_user u ON u.id = c.user_id WHERE u.email_normalized = @e", new NpgsqlParameter("e", email)));
+        Assert.Null(await AdminScalarAsync<DateTime?>("SELECT email_verified_at FROM nina.app_user WHERE email_normalized = @e", new NpgsqlParameter("e", email)));
+        await Api.VerifyAsync(email, Api.LastCode(email));
+        Assert.NotNull(await AdminScalarAsync<DateTime?>("SELECT email_verified_at FROM nina.app_user WHERE email_normalized = @e", new NpgsqlParameter("e", email)));
+        Assert.Equal(1, await AdminScalarAsync<long>("SELECT count(*) FROM nina.email_verification_code c JOIN nina.app_user u ON u.id = c.user_id WHERE u.email_normalized = @e AND c.used_at IS NOT NULL", new NpgsqlParameter("e", email)));
+    }
+
+    [Fact]
+    public async Task NR09_resetting_the_password_does_not_verify_the_email_only_the_code_does()
+    {
+        var email = ApiClient.NewEmail();
+        await Api.PostAsync("/v1/auth/register", RegisterBody(email));
+        await Api.PostAsync("/v1/auth/password/forgot", new JsonObject { ["email"] = email });
+        var token = Factory.Mailer.Sent.Last(m => m.To == email && m.Kind == MailKind.PasswordReset).Secret!;
+        var reset = await Api.PostAsync("/v1/auth/password/reset", new JsonObject { ["token"] = token, ["new_password"] = "reset-long-password-9" });
+
+        Assert.Equal(HttpStatusCode.NoContent, reset.Status);
+        Assert.Null(await AdminScalarAsync<DateTime?>("SELECT email_verified_at FROM nina.app_user WHERE email_normalized = @e", new NpgsqlParameter("e", email)));
+        var login = await Api.PostAsync("/v1/auth/login", new JsonObject { ["email"] = email, ["password"] = "reset-long-password-9", ["device"] = ApiClient.Device() });
+        Assert.Equal(HttpStatusCode.Unauthorized, login.Status);                       // segue sem poder entrar ate confirmar o codigo
+        await Api.VerifyAsync(email, Api.LastCode(email));
+        await Api.LoginAsync(email, "reset-long-password-9");
     }
 }

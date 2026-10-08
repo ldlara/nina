@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json.Nodes;
 using Nina.Identity.Mail;
 using Nina.Identity.Tests.Infrastructure;
@@ -319,5 +320,47 @@ public sealed class PasswordAndReauthTests(PostgresFixture postgres) : Integrati
         var viaOldReauth = await ChangePassword(s, reauth);
         Assert.Equal(HttpStatusCode.Unauthorized, viaOldReauth.Status);
         Assert.Equal(0, await AdminScalarAsync<long>("SELECT count(*) FROM nina.auth_session WHERE revoked_at IS NULL"));
+    }
+
+    // ------------------------------------------------------------ NR-03: o jti nasce no livro-razao do banco
+
+    [Fact]
+    public async Task NR03_the_reauth_jti_is_issued_to_the_ledger_with_user_session_scope_and_validity_and_then_consumed()
+    {
+        var s = await Api.RegisterAndVerifyAsync();
+        var token = await Api.ReauthAsync(s, ReauthScopes.AccountPasswordChange, ReauthScopes.IdentityLink);
+
+        Assert.Equal(1, await AdminScalarAsync<long>("SELECT count(*) FROM nina.reauth_jti WHERE user_id = @u AND session_id = @s AND consumed_at IS NULL AND scopes = ARRAY['ACCOUNT_PASSWORD_CHANGE','IDENTITY_LINK']::text[] AND expires_at - issued_at <= interval '5 minutes'",
+            new NpgsqlParameter("u", s.UserId), new NpgsqlParameter("s", s.SessionId)));
+        Assert.Equal(HttpStatusCode.NoContent, (await ChangePassword(s, token)).Status);
+        Assert.Equal("ACCOUNT_PASSWORD_CHANGE", await AdminScalarAsync<string>("SELECT consumed_scope FROM nina.reauth_jti WHERE user_id = @u", new NpgsqlParameter("u", s.UserId)));
+    }
+
+    [Fact]
+    public async Task NR03_a_correctly_signed_token_whose_jti_was_never_issued_in_the_ledger_is_refused()
+    {
+        // Mesmo um JWT com assinatura valida (o que um atacante so teria com a chave) nao vale sem a linha de emissao assinada pelo servidor.
+        var s = await Api.RegisterAndVerifyAsync();
+        var tokens = Factory.Services.GetRequiredService<Nina.Identity.Services.TokenService>();
+        var (rogue, _, _) = tokens.IssueReauthToken(s.UserId, s.SessionId, [ReauthScopes.AccountPasswordChange]);
+
+        var response = await ChangePassword(s, rogue);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.Status);
+        Assert.Equal("REAUTH_REQUIRED", response.Code);
+        Assert.Equal(0, await AdminScalarAsync<long>("SELECT count(*) FROM nina.reauth_jti"));
+        Assert.Equal(HttpStatusCode.OK, (await Api.PostAsync("/v1/auth/login", new JsonObject { ["email"] = s.Email, ["password"] = s.Password, ["device"] = ApiClient.Device() })).Status);   // senha intacta
+    }
+
+    [Fact]
+    public async Task NR03_without_the_server_key_in_the_database_no_reauth_token_is_handed_out()
+    {
+        var s = await Api.RegisterAndVerifyAsync();
+        await AdminExecAsync("DELETE FROM nina.server_key");
+
+        var response = await Api.PostAsync("/v1/auth/reauthenticate", new JsonObject { ["password"] = s.Password, ["scope"] = new JsonArray(ReauthScopes.AccountPasswordChange) }, s.AccessToken);
+
+        Assert.NotEqual(HttpStatusCode.OK, response.Status);      // sem a chave o banco recusa a emissao (NN070, falha fechada): nenhum token e entregue
+        Assert.Null(response.Json?["reauth_token"]);
     }
 }
