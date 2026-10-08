@@ -635,6 +635,9 @@ CREATE TRIGGER sleep_session_wake_cascade AFTER UPDATE ON nina.sleep_session
 CREATE FUNCTION nina.sleep_overlap_guard() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
 BEGIN
+  IF TG_OP = 'UPDATE' AND NEW.start_at IS NOT DISTINCT FROM OLD.start_at AND NEW.end_at IS NOT DISTINCT FROM OLD.end_at THEN
+    RETURN NEW;      -- intervalo inalterado: nao re-julga dados aceitos sob a politica anterior
+  END IF;
   IF NEW.deleted_at IS NULL AND nina.param_text('sleep.overlap_policy', 'accept_and_warn') = 'reject'
      AND EXISTS (SELECT 1 FROM nina.sleep_session o
                   WHERE o.baby_id = NEW.baby_id AND o.id <> NEW.id AND o.deleted_at IS NULL
@@ -1002,11 +1005,11 @@ BEGIN
         RAISE EXCEPTION 'privacy.owner_deletion_policy invalida: % (cascade|block|transfer_ownership)', NEW.value #>> '{}' USING ERRCODE = 'check_violation';
       END IF;
     WHEN 'age.corrected_window_months' THEN
-      IF NEW.value_type <> 'int' OR (NEW.value #>> '{}')::numeric NOT BETWEEN 1 AND 120 THEN
+      IF NEW.value_type <> 'int' OR jsonb_typeof(NEW.value) <> 'number' OR (NEW.value #>> '{}')::numeric NOT BETWEEN 1 AND 120 THEN
         RAISE EXCEPTION 'age.corrected_window_months deve ser int entre 1 e 120' USING ERRCODE = 'check_violation';
       END IF;
     WHEN 'sleep.night_awakenings.min_session_minutes' THEN
-      IF NEW.value_type <> 'int' OR (NEW.value #>> '{}')::numeric NOT BETWEEN 0 AND 1440 THEN
+      IF NEW.value_type <> 'int' OR jsonb_typeof(NEW.value) <> 'number' OR (NEW.value #>> '{}')::numeric NOT BETWEEN 0 AND 1440 THEN
         RAISE EXCEPTION 'sleep.night_awakenings.min_session_minutes deve ser int entre 0 e 1440' USING ERRCODE = 'check_violation';
       END IF;
     ELSE NULL;
