@@ -198,15 +198,20 @@ public sealed class PrivacyTests(PgCluster cluster) : DbTestBase(cluster)
 
     // ------------------------------------------------------------------ exclusao de conta do Owner (funcoes definer + fichas)
 
+    // NR-03/NR-14: pelo app o pedido SEMPRE nasce confirmado (reautenticacao ACCOUNT_DELETE emitida e comprovada). O pedido NAO confirmado so existe
+    // se criado fora da funcao (dono/legado): serve para provar que erase_user continua exigindo a confirmacao para bebe compartilhado.
     private async Task<Guid> ScheduleDeletionAsync(Guid user, bool confirmed, bool elapsed = true)
     {
         Guid id;
-        await using (var s = await AsApp(user))
+        if (confirmed)
         {
-            id = confirmed
-                ? await s.ScalarAsync<Guid>("SELECT nina.request_account_deletion(@h)", Bytes("h", await ReauthAsync(user, "ACCOUNT_DELETE")))
-                : await s.ScalarAsync<Guid>("SELECT nina.request_account_deletion(NULL)");
+            await using var s = await AsApp(user);
+            id = await s.ScalarAsync<Guid>("SELECT nina.request_account_deletion(@h)", Bytes("h", await ReauthAsync(user, "ACCOUNT_DELETE")));
             await s.CommitAsync();
+        }
+        else
+        {
+            id = await OwnerScalarAsync<Guid>($"INSERT INTO nina.account_deletion_request (user_id, grace_days, scheduled_for) VALUES ('{user}', 1, now()) RETURNING id");
         }
 
         if (elapsed)

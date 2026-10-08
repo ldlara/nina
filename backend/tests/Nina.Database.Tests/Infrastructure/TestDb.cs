@@ -190,6 +190,32 @@ public abstract class DbTestBase(PgCluster cluster) : IAsyncLifetime
         return hash;
     }
 
+    /// <summary>Emite, como a API (MAC do servidor), o codigo de verificacao de e-mail do usuario; devolve o id (ou null se nao emitido).</summary>
+    public async Task<Guid?> IssueEmailCodeAsync(Guid user, byte[] codeHash, TimeSpan? validity = null, TimeSpan? minInterval = null)
+    {
+        var now = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        var expires = now + (validity ?? TimeSpan.FromMinutes(10));
+        await using var s = await AsApp(user);
+        var id = await s.ScalarAsync<Guid?>(
+            "SELECT nina.email_code_issue(@h, @now, @exp, @interval, @mac)",
+            Bytes("h", codeHash), P("now", now.UtcDateTime), P("exp", expires.UtcDateTime),
+            new NpgsqlParameter("interval", NpgsqlDbType.Interval) { Value = (object?)minInterval ?? DBNull.Value },
+            Bytes("mac", ServerSigner.Sign("email.code", ServerSigner.EmailCode(user, codeHash, expires))));
+        await s.CommitAsync();
+        return id;
+    }
+
+    /// <summary>Comando <c>nina.email_change_create</c> com o MAC do servidor para o usuario/endereco/codigo dados (executar na sessao do usuario).</summary>
+    public static Task<int> EmailChangeCreateAsync(Session s, Guid user, string newEmail, byte[] codeHash, byte[] reauthJti, TimeSpan? validity = null)
+    {
+        var now = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        var expires = now + (validity ?? TimeSpan.FromMinutes(10));
+        return s.ExecAsync(
+            "SELECT nina.email_change_create(@e, @c, @now, @exp, @r, @mac)",
+            P("e", newEmail), Bytes("c", codeHash), P("now", now.UtcDateTime), P("exp", expires.UtcDateTime), Bytes("r", reauthJti),
+            Bytes("mac", ServerSigner.Sign("email.change", ServerSigner.EmailChange(user, codeHash, newEmail, expires))));
+    }
+
     public static NpgsqlParameter P(string name, object? value) => new(name, value ?? DBNull.Value);
 
     public static NpgsqlParameter Bytes(string name, byte[] value) => new(name, NpgsqlDbType.Bytea) { Value = value };

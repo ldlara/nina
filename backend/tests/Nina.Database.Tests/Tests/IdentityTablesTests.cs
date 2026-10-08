@@ -23,7 +23,7 @@ public sealed class IdentityTablesTests(PgCluster cluster) : DbTestBase(cluster)
               ('{W.Alice}', decode(repeat('a1', 32), 'hex'), now() + interval '30 days'), ('{W.Bob}', decode(repeat('b1', 32), 'hex'), now() + interval '30 days');
             INSERT INTO nina.recovery_request (user_id, token_hash, expires_at) VALUES
               ('{W.Alice}', decode(repeat('a2', 32), 'hex'), now() + interval '1 hour'), ('{W.Bob}', decode(repeat('b2', 32), 'hex'), now() + interval '1 hour');
-            INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type) VALUES ('BABY', '{W.BabyB}', 'Seed');
+            INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type) VALUES ('BABY', '{W.BabyB}', 'BabyDeleted');
             INSERT INTO nina.subscription (family_id, plan_id, store, product_ref, original_transaction_ref, store_transaction_ref, status)
               VALUES ('{W.FamilyB}', 2, 'APPLE', 'p', 'orig-b', 'tx-b', 'ACTIVE');
             """);
@@ -129,9 +129,10 @@ public sealed class IdentityTablesTests(PgCluster cluster) : DbTestBase(cluster)
         Assert.Equal("42501", await FailsAsync(Role.App, W.Dave, "SELECT aggregate_id FROM nina.outbox_message"));
         Assert.Equal("42501", await FailsAsync(Role.App, W.Dave, "UPDATE nina.outbox_message SET processed_at = now()"));
         Assert.Equal("42501", await FailsAsync(Role.App, W.Dave, "DELETE FROM nina.outbox_message"));
-        Assert.Null(await FailsAsync(Role.App, W.Dave, "INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type, payload) VALUES ('USER', gen_random_uuid(), 'Evt', '{\"count\": 1}')"));
-        Assert.Null(await FailsAsync(Role.App, W.Dave, "INSERT INTO nina.outbox_message (aggregate_type, event_type, event_key) VALUES ('USER', 'Evt', 'k1') ON CONFLICT DO NOTHING"));       // sem alvo de inferencia (que exigiria SELECT)
-        Assert.Equal("42501", await FailsAsync(Role.App, W.Dave, "INSERT INTO nina.outbox_message (aggregate_type, event_type, event_key) VALUES ('USER', 'Evt', 'k1') ON CONFLICT (event_key) DO NOTHING"));
+        // NR-11: o app so enfileira avisos de seguranca PARA SI (tipo do catalogo, agregado = o proprio usuario), por 4 colunas
+        Assert.Null(await FailsAsync(Role.App, W.Dave, $"INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type, payload) VALUES ('USER', '{W.Dave}', 'SecurityNoticeRequested', '{{\"notice\": \"PASSWORD_CHANGED\"}}')"));
+        Assert.Equal("42501", await FailsAsync(Role.App, W.Dave, $"INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type, payload) VALUES ('USER', '{W.Bob}', 'SecurityNoticeRequested', '{{\"notice\": \"PASSWORD_CHANGED\"}}')"));   // aviso a outro usuario
+        Assert.Equal("42501", await FailsAsync(Role.App, W.Dave, $"INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type, event_key) VALUES ('USER', '{W.Dave}', 'SecurityNoticeRequested', 'k1')"));   // event_key e do sistema
     }
 
     [Fact]
