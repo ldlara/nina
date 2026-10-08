@@ -1,5 +1,5 @@
 -- =============================================================================
--- Nina - migração 0001_init (DB-001) - revisada pelo SECURITY-REVIEW-001 e pelo spike ARCH-003
+-- Nina - migração 0001_init (DB-001) - revisada pelo SECURITY-REVIEW-001 (+ reteste NR-03..NR-13) e pelo spike ARCH-003
 -- Modelo físico PostgreSQL. Especificação: specs/database-spec.md
 -- Alvo: PostgreSQL 15+ (validado em 16). Sem extensões externas.
 -- Executar com: psql -v ON_ERROR_STOP=1 -f 0001_init.sql  (uma transação), como DONO do schema.
@@ -15,6 +15,8 @@
 -- catálogo/identificadores (plan.code, flag_key, param_key, purpose_key, audit_event.action) seguem em minúsculas.
 -- Controles privilegiados (autoria, purga, propriedade, vínculo) NÃO dependem de GUC definível pelo chamador:
 -- usam fichas por transação (nina.guard_arm/guard_ok) que só código SECURITY DEFINER do dono consegue emitir.
+-- Fatos que só a API pode atestar (reautenticação emitida, código de e-mail, verificação social) entram assinados por uma chave
+-- servidor<->banco (nina.server_key, instalada pelo dono com nina.provision_server_key; sem ela essas funções falham fechado).
 -- =============================================================================
 
 BEGIN;
@@ -3345,7 +3347,7 @@ INSERT INTO nina.outbox_event_type (event_type, aggregate_type, allowed_keys) VA
   ('PrivacyRequestOpened',        'PRIVACY_REQUEST', ARRAY['request_type']),
   ('PrivacyRequestCancelled',     'PRIVACY_REQUEST', ARRAY[]::text[]);
 
-INSERT INTO nina.schema_migration (version, description) VALUES ('0001', 'init: modelo fisico MVP (DB-001) + convencoes ADR-0009/0010 + hardening SECURITY-REVIEW-001 + sync (ARCH-003)');
+INSERT INTO nina.schema_migration (version, description) VALUES ('0001', 'init: modelo fisico MVP (DB-001) + convencoes ADR-0009/0010 + hardening SECURITY-REVIEW-001 e reteste (NR-03..NR-13) + sync (ARCH-003)');
 
 SELECT nina.guard_disarm('migration');
 
