@@ -2444,8 +2444,9 @@ END $$;
 --     (SECURITY DEFINER, search_path fixo, EXECUTE so para nina_app), que emitem as fichas lidas por membership_guard.
 -- -----------------------------------------------------------------------------
 
--- Reautenticacao comprovada (SR-013/SR-016): o jti ja foi consumido pelo Identity (consume_reauth_jti); aqui se verifica que
--- existe, e do usuario do contexto, do escopo certo, recente e AINDA nao vinculado, e o vincula ao recurso (uso unico real).
+-- Reautenticacao comprovada (SR-013/SR-016/NR-03): o jti foi EMITIDO pela API (reauth_issue, MAC) e consumido pelo Identity
+-- (consume_reauth_jti); aqui se verifica que existe, e do usuario do contexto, foi consumido NESTE escopo, recentemente, e AINDA nao
+-- foi vinculado, e o vincula ao recurso (uso unico real). Um jti inventado por SQL nao existe no livro-razao.
 CREATE FUNCTION nina.reauth_bind(p_jti_hash bytea, p_scope text, p_entity_type text, p_entity_id uuid,
                                  p_max_age interval DEFAULT interval '10 minutes') RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
@@ -2453,8 +2454,8 @@ DECLARE v_user uuid := nina.current_user_id();
 BEGIN
   IF v_user IS NULL OR p_jti_hash IS NULL THEN RETURN false; END IF;
   UPDATE nina.reauth_jti SET bound_entity_type = p_entity_type, bound_entity_id = p_entity_id
-   WHERE jti_hash = p_jti_hash AND user_id = v_user AND scope = p_scope AND bound_entity_id IS NULL
-     AND consumed_at >= now() - p_max_age;
+   WHERE jti_hash = p_jti_hash AND user_id = v_user AND consumed_scope = p_scope AND bound_entity_id IS NULL
+     AND consumed_at IS NOT NULL AND consumed_at >= now() - p_max_age;
   RETURN FOUND;
 END $$;
 
@@ -2653,20 +2654,55 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
    WHERE i.provider = p_provider AND i.provider_subject = p_subject $$;
 
 -- Consome (uso unico) o token de recuperacao/verificacao pelo HASH; devolve o usuario dono ou NULL.
+-- NR-13: `p_now` vem do chamador (a API usa relogio injetavel nos testes), mas nunca pode RETROCEDER mais de 2 min em relacao ao
+-- banco: quem tem SQL e o hash nao "estica" a validade de um segredo expirado. Avancar so encurta a validade.
+CREATE FUNCTION nina.clamp_now(p_now timestamptz) RETURNS timestamptz
+LANGUAGE sql STABLE AS $$ SELECT greatest(coalesce(p_now, now()), now() - interval '2 minutes') $$;
+
 CREATE FUNCTION nina.auth_consume_recovery(p_hash bytea, p_now timestamptz) RETURNS uuid
 LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
-  UPDATE nina.recovery_request SET used_at = p_now
-   WHERE token_hash = p_hash AND used_at IS NULL AND expires_at > p_now
+  UPDATE nina.recovery_request SET used_at = nina.clamp_now(p_now)
+   WHERE token_hash = p_hash AND used_at IS NULL AND expires_at > nina.clamp_now(p_now)
   RETURNING user_id $$;
 
--- Livro-razao de reautenticacao: registra o jti (hash) como consumido; false se ja existia (replay, conta a tentativa).
-CREATE FUNCTION nina.consume_reauth_jti(p_jti_hash bytea, p_scope text, p_session uuid, p_expires timestamptz) RETURNS boolean
+-- Emissao do token de reautenticacao (NR-03). So a API chama com um MAC valido; o jti passa a existir no livro-razao com usuario,
+-- sessao, escopos e validade. Mensagem canonica do MAC (proposito 'reauth.issue'):
+--   usuario|sessao|hex(jti_hash)|escopos ordenados (ordinal) separados por virgula|emissao (epoch s)|expiracao (epoch s)
+CREATE FUNCTION nina.reauth_issue(p_jti_hash bytea, p_session uuid, p_scopes text[], p_issued timestamptz, p_expires timestamptz, p_mac bytea)
+RETURNS void
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
+DECLARE v_user uuid := nina.current_user_id(); v_scopes text[] := coalesce(p_scopes, ARRAY[]::text[]); v_sorted text;
+BEGIN
+  IF v_user IS NULL THEN RAISE EXCEPTION 'reautenticacao exige usuario no contexto' USING ERRCODE = 'NN015'; END IF;
+  SELECT coalesce(string_agg(x, ',' ORDER BY x COLLATE "C"), '') INTO v_sorted FROM unnest(v_scopes) x;
+  IF p_jti_hash IS NULL OR p_session IS NULL OR p_issued IS NULL OR p_expires IS NULL
+     OR NOT nina.mac_ok('reauth.issue',
+          v_user::text || '|' || p_session::text || '|' || encode(p_jti_hash, 'hex') || '|' || v_sorted || '|'
+          || floor(extract(epoch FROM p_issued))::bigint::text || '|' || floor(extract(epoch FROM p_expires))::bigint::text, p_mac) THEN
+    RAISE EXCEPTION 'SERVER_SIGNATURE_INVALID: reautenticacao so e emitida pelo servidor' USING ERRCODE = 'NN071';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM nina.auth_session s WHERE s.id = p_session AND s.user_id = v_user AND s.revoked_at IS NULL) THEN
+    RAISE EXCEPTION 'SERVER_SIGNATURE_INVALID: sessao inexistente, de outro usuario ou revogada' USING ERRCODE = 'NN071';
+  END IF;
+  INSERT INTO nina.reauth_jti (jti_hash, user_id, session_id, scopes, issued_at, expires_at)
+  VALUES (p_jti_hash, v_user, p_session, v_scopes, p_issued, p_expires);       -- jti repetido: unique_violation (23505)
+END $$;
+
+-- Consome (uso unico) um jti EMITIDO: do usuario e da sessao do contexto, ainda nao consumido, valido e dentro do escopo (escopos
+-- vazios = transicao v1.x, qualquer operacao sensivel, uma vez). false para jti inexistente/forjado, reapresentado, expirado, de
+-- outra sessao ou de outro escopo (a reapresentacao conta em attempts).
+CREATE FUNCTION nina.consume_reauth_jti(p_jti_hash bytea, p_scope text, p_session uuid) RETURNS boolean
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
 DECLARE v_user uuid := nina.current_user_id();
 BEGIN
   IF v_user IS NULL THEN RAISE EXCEPTION 'reautenticacao exige usuario no contexto' USING ERRCODE = 'NN015'; END IF;
-  INSERT INTO nina.reauth_jti (jti_hash, user_id, session_id, scope, expires_at)
-  VALUES (p_jti_hash, v_user, p_session, p_scope, p_expires) ON CONFLICT (jti_hash) DO NOTHING;
+  IF p_scope IS NULL OR p_scope NOT IN ('ACCOUNT_PASSWORD_CHANGE', 'ACCOUNT_EMAIL_CHANGE', 'IDENTITY_LINK', 'IDENTITY_UNLINK',
+       'DATA_EXPORT_REQUEST', 'DATA_EXPORT_DOWNLOAD', 'ACCOUNT_DELETE', 'PRIVACY_REQUEST', 'BABY_DELETE', 'OWNERSHIP_TRANSFER') THEN
+    RETURN false;
+  END IF;
+  UPDATE nina.reauth_jti SET consumed_at = now(), consumed_scope = p_scope, attempts = least(attempts + 1, 32767)
+   WHERE jti_hash = p_jti_hash AND user_id = v_user AND session_id = p_session AND consumed_at IS NULL
+     AND (cardinality(scopes) = 0 OR p_scope = ANY (scopes)) AND expires_at > now() - interval '1 minute';
   IF FOUND THEN RETURN true; END IF;
   UPDATE nina.reauth_jti SET attempts = least(attempts + 1, 32767) WHERE jti_hash = p_jti_hash AND user_id = v_user;
   RETURN false;
@@ -2708,12 +2744,25 @@ BEGIN
   SELECT up.c_at, up.s_at FROM up;
 END $$;
 
--- Codigo de verificacao do e-mail atual (BE-001): emite (invalida o anterior) e confere com contador de tentativas.
-CREATE FUNCTION nina.email_code_issue(p_code_hash bytea, p_now timestamptz, p_expires timestamptz) RETURNS uuid
+-- Codigo de verificacao do e-mail atual (BE-001/NR-09): emite (invalida o anterior) e confere com contador de tentativas.
+-- NR-09: o app NAO escreve email_verified_at (nem INSERT nem UPDATE): so email_code_verify (e register_social_user, atestado pelo
+-- provedor) o definem. Para nao bastar "emitir um codigo que eu mesmo conheco e verifica-lo", a EMISSAO exige o MAC do servidor
+-- (proposito 'email.code', mensagem usuario|hex(code_hash)|expiracao epoch s): so a API, que gera o codigo e o envia ao e-mail, assina.
+-- Devolve NULL (sem emitir) se a conta ja esta verificada/inativa ou se o ultimo codigo tem menos de p_min_interval (reenvio).
+CREATE FUNCTION nina.email_code_issue(p_code_hash bytea, p_now timestamptz, p_expires timestamptz, p_min_interval interval, p_mac bytea) RETURNS uuid
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
-DECLARE v_user uuid := nina.current_user_id(); v_id uuid;
+DECLARE v_user uuid := nina.current_user_id(); v_id uuid; u nina.app_user%ROWTYPE;
 BEGIN
   IF v_user IS NULL THEN RAISE EXCEPTION 'codigo exige usuario no contexto' USING ERRCODE = 'NN015'; END IF;
+  IF p_code_hash IS NULL OR p_expires IS NULL OR p_now IS NULL
+     OR NOT nina.mac_ok('email.code', v_user::text || '|' || encode(p_code_hash, 'hex') || '|' || floor(extract(epoch FROM p_expires))::bigint::text, p_mac) THEN
+    RAISE EXCEPTION 'SERVER_SIGNATURE_INVALID: o codigo de verificacao so e emitido pelo servidor' USING ERRCODE = 'NN071';
+  END IF;
+  SELECT * INTO u FROM nina.app_user x WHERE x.id = v_user AND x.status = 'ACTIVE' FOR UPDATE;
+  IF NOT FOUND OR u.email_verified_at IS NOT NULL THEN RETURN NULL; END IF;
+  IF p_min_interval IS NOT NULL AND EXISTS (SELECT 1 FROM nina.email_verification_code e WHERE e.user_id = v_user AND e.created_at > p_now - p_min_interval) THEN
+    RETURN NULL;
+  END IF;
   UPDATE nina.email_verification_code SET invalidated_at = p_now WHERE user_id = v_user AND used_at IS NULL AND invalidated_at IS NULL;
   INSERT INTO nina.email_verification_code (user_id, code_hash, created_at, expires_at, max_attempts)
   VALUES (v_user, p_code_hash, p_now, p_expires, nina.param_int('auth.email_code_max_attempts', 5)) RETURNING id INTO v_id;
@@ -2724,31 +2773,60 @@ END $$;
 -- SEM excecao (o contador de tentativas persiste; esgotado, o codigo e invalidado). Resposta uniforme para conta inexistente.
 CREATE FUNCTION nina.email_code_verify(p_email text, p_code_hash bytea, p_now timestamptz) RETURNS uuid
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
-DECLARE u nina.app_user%ROWTYPE; c nina.email_verification_code%ROWTYPE;
+DECLARE u nina.app_user%ROWTYPE; c nina.email_verification_code%ROWTYPE; v_now timestamptz := nina.clamp_now(p_now);
 BEGIN
   SELECT * INTO u FROM nina.app_user x WHERE x.email_normalized = lower(btrim(p_email)) AND x.status = 'ACTIVE';
   IF NOT FOUND THEN RETURN NULL; END IF;
   SELECT * INTO c FROM nina.email_verification_code e
-   WHERE e.user_id = u.id AND e.used_at IS NULL AND e.invalidated_at IS NULL AND e.expires_at > p_now FOR UPDATE;
+   WHERE e.user_id = u.id AND e.used_at IS NULL AND e.invalidated_at IS NULL AND e.expires_at > v_now FOR UPDATE;
   IF NOT FOUND THEN RETURN NULL; END IF;
   IF c.code_hash = p_code_hash THEN
-    UPDATE nina.email_verification_code SET used_at = p_now WHERE id = c.id;
-    UPDATE nina.app_user SET email_verified_at = coalesce(email_verified_at, p_now) WHERE id = u.id;
+    UPDATE nina.email_verification_code SET used_at = v_now WHERE id = c.id;
+    UPDATE nina.app_user SET email_verified_at = coalesce(email_verified_at, v_now) WHERE id = u.id;
     RETURN u.id;
   END IF;
   UPDATE nina.email_verification_code SET attempts = attempts + 1,
-         invalidated_at = CASE WHEN attempts + 1 >= max_attempts THEN p_now END WHERE id = c.id;
+         invalidated_at = CASE WHEN attempts + 1 >= max_attempts THEN v_now END WHERE id = c.id;
   RETURN NULL;
 END $$;
 
+-- Cadastro/login social (NR-09): cria a conta JA verificada (o provedor atestou o e-mail) e a identidade. O app nao grava
+-- email_verified_at; o atestado do provedor chega assinado pela API (proposito 'social.register', mensagem
+-- usuario|provedor|subject|e-mail normalizado). Exige o contexto = p_id (a RLS das demais tabelas segue valendo).
+CREATE FUNCTION nina.register_social_user(p_id uuid, p_email text, p_display_name text, p_locale text, p_timezone text,
+                                          p_provider text, p_subject text, p_now timestamptz, p_mac bytea) RETURNS void
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
+DECLARE v_user uuid := nina.current_user_id(); v_now timestamptz := nina.clamp_now(p_now);
+BEGIN
+  IF v_user IS NULL OR p_id IS DISTINCT FROM v_user THEN
+    RAISE EXCEPTION 'cadastro social exige o proprio usuario no contexto' USING ERRCODE = 'NN015';
+  END IF;
+  IF p_email IS NULL OR p_provider IS NULL OR p_subject IS NULL
+     OR NOT nina.mac_ok('social.register', p_id::text || '|' || p_provider || '|' || p_subject || '|' || lower(btrim(p_email)), p_mac) THEN
+    RAISE EXCEPTION 'SERVER_SIGNATURE_INVALID: a verificacao social so e atestada pelo servidor' USING ERRCODE = 'NN071';
+  END IF;
+  INSERT INTO nina.app_user (id, email, email_verified_at, display_name, locale, timezone, created_at, updated_at)
+  VALUES (p_id, p_email, v_now, p_display_name, p_locale, p_timezone, v_now, v_now);
+  INSERT INTO nina.user_identity (user_id, provider, provider_subject, email_at_link, linked_at)
+  VALUES (p_id, p_provider, p_subject, p_email, v_now);
+END $$;
+
 -- Troca de e-mail (RF-050): pendencia + codigo enviado ao NOVO endereco; so a confirmacao altera app_user.email.
+-- NR-09: o codigo enviado ao NOVO endereco tambem e assinado pelo servidor (proposito 'email.change', mensagem
+-- usuario|hex(code_hash)|novo e-mail normalizado|expiracao epoch s); sem isso quem tem SQL emitiria o proprio codigo e "confirmaria"
+-- qualquer endereco de terceiros.
 CREATE FUNCTION nina.email_change_create(p_new_email text, p_code_hash bytea, p_now timestamptz, p_expires timestamptz,
-                                         p_reauth_jti_hash bytea) RETURNS uuid
+                                         p_reauth_jti_hash bytea, p_mac bytea) RETURNS uuid
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
 DECLARE v_user uuid := nina.current_user_id(); v_id uuid := gen_random_uuid();
 BEGIN
   IF v_user IS NULL OR NOT EXISTS (SELECT 1 FROM nina.app_user WHERE id = v_user AND status = 'ACTIVE') THEN
     RAISE EXCEPTION 'troca de e-mail exige usuario ativo no contexto' USING ERRCODE = 'NN015';
+  END IF;
+  IF p_new_email IS NULL OR p_code_hash IS NULL OR p_expires IS NULL
+     OR NOT nina.mac_ok('email.change', v_user::text || '|' || encode(p_code_hash, 'hex') || '|' || lower(btrim(p_new_email)) || '|'
+                                        || floor(extract(epoch FROM p_expires))::bigint::text, p_mac) THEN
+    RAISE EXCEPTION 'SERVER_SIGNATURE_INVALID: o codigo de troca de e-mail so e emitido pelo servidor' USING ERRCODE = 'NN071';
   END IF;
   IF NOT nina.reauth_bind(p_reauth_jti_hash, 'ACCOUNT_EMAIL_CHANGE', 'EMAIL_CHANGE_REQUEST', v_id) THEN
     RAISE EXCEPTION 'REAUTH_REQUIRED: troca de e-mail exige reautenticacao comprovada' USING ERRCODE = 'NN014';
@@ -2763,7 +2841,7 @@ END $$;
 
 CREATE FUNCTION nina.email_change_confirm(p_code_hash bytea, p_now timestamptz) RETURNS text
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = nina, pg_temp AS $$
-DECLARE v_user uuid := nina.current_user_id(); r nina.email_change_request%ROWTYPE;
+DECLARE v_user uuid := nina.current_user_id(); r nina.email_change_request%ROWTYPE; v_now timestamptz := nina.clamp_now(p_now);
 BEGIN
   IF v_user IS NULL THEN RAISE EXCEPTION 'confirmacao exige usuario no contexto' USING ERRCODE = 'NN015'; END IF;
   SELECT * INTO r FROM nina.email_change_request e
