@@ -1,0 +1,72 @@
+{
+  "name": "G_newborn_cold_start",
+  "description": "Sem hist\u00F3rico, 20 dias de vida.",
+  "as_of": "2026-10-08T13:00:00.0000000\u002B00:00",
+  "request": {
+    "Baby": {
+      "BirthDate": "2026-09-18",
+      "DueDate": null,
+      "TimeZoneId": "America/Sao_Paulo"
+    },
+    "History": [],
+    "Preferences": null
+  },
+  "expected": {
+    "Status": "Available",
+    "DisclaimerKey": "prediction.estimate_not_diagnosis",
+    "Predictions": [
+      {
+        "Kind": "NextNap",
+        "PredictedStart": "2026-10-08T13:38:00\u002B00:00",
+        "PredictedEnd": "2026-10-08T13:52:00\u002B00:00",
+        "Confidence": "Low",
+        "ConfidenceScore": 0,
+        "Explanation": {
+          "Key": "prediction.explain.age_only",
+          "Params": {
+            "age_basis": "CHRONOLOGICAL",
+            "age_months": 0,
+            "anchor_assumed": true,
+            "typical_wake_minutes": 45
+          }
+        },
+        "BaselineOnly": true
+      }
+    ],
+    "StatusExplanation": null,
+    "ModelVersion": "rules-2026.10.1",
+    "ReferenceTableVersion": "0.1.0-draft",
+    "ReferenceTableHash": "31dbf0563eedae32",
+    "ReferenceTableIsDraft": true,
+    "ComputedAt": "2026-10-08T13:00:00\u002B00:00",
+    "InputsFingerprint": "33be47919cd84e24",
+    "Age": {
+      "ChronologicalDays": 20,
+      "CorrectedDays": null,
+      "CorrectionApplied": false,
+      "EffectiveDays": 20,
+      "Basis": "CHRONOLOGICAL"
+    },
+    "Plan": {
+      "ExpectedNapCount": null,
+      "NapCountSource": "AGE",
+      "NapsCompletedToday": 0,
+      "BedtimeRangeFromMinuteOfDay": null,
+      "BedtimeRangeToMinuteOfDay": null,
+      "PreferencesApplied": false
+    },
+    "DataQuality": {
+      "ValidSessions": 0,
+      "IgnoredInvalid": 0,
+      "IgnoredTooShort": 0,
+      "IgnoredTooLong": 0,
+      "IgnoredFuture": 0,
+      "MergedOverlaps": 0,
+      "OpenSessionIgnored": false,
+      "TimezoneChangedInHistory": false,
+      "WakeWindowObservations": 0,
+      "WakeWindowOutliers": 0,
+      "DaysUsed": 0
+    }
+  }
+}

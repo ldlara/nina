@@ -1,0 +1,118 @@
+# NetworkPolicies (SR-018 / Shadow IT S7): deny-all por padrão + allow explícito.
+# Fluxo permitido: Router(Route) -> BFF -> API -> PostgreSQL. Nada além disso.
+# Ajuste os seletores do PostgreSQL ao seu ambiente (pod no namespace ou serviço gerenciado externo).
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  labels: { app.kubernetes.io/part-of: nina }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# DNS (necessário para resolver nomes de Service) — única saída genérica permitida.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns
+  labels: { app.kubernetes.io/part-of: nina }
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: openshift-dns }
+      ports:
+        - { protocol: UDP, port: 5353 }
+        - { protocol: TCP, port: 5353 }
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# Route -> BFF: apenas o Ingress Controller (router) do OpenShift.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-router-to-bff
+  labels: { app.kubernetes.io/part-of: nina }
+spec:
+  podSelector:
+    matchLabels: { app: nina-bff }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { policy-group.network.openshift.io/ingress: "" }
+      ports:
+        - { protocol: TCP, port: 8080 }
+---
+# BFF -> API (saída do BFF)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-bff-egress-to-api
+  labels: { app.kubernetes.io/part-of: nina }
+spec:
+  podSelector:
+    matchLabels: { app: nina-bff }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app: nina-api }
+      ports:
+        - { protocol: TCP, port: 8080 }
+---
+# BFF -> API (entrada da API: somente o BFF)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-bff-to-api
+  labels: { app.kubernetes.io/part-of: nina }
+spec:
+  podSelector:
+    matchLabels: { app: nina-api }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: nina-bff }
+      ports:
+        - { protocol: TCP, port: 8080 }
+---
+# API -> PostgreSQL (saída da API). PostgreSQL no mesmo namespace: seletor abaixo (ajuste o label).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-egress-to-postgres
+  labels: { app.kubernetes.io/part-of: nina }
+spec:
+  podSelector:
+    matchLabels: { app: nina-api }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: postgresql }  # TODO(ADR-0006): ajustar ao PostgreSQL real
+        # Se o banco for gerenciado/externo, troque por ipBlock restrito ao IP/CIDR do serviço:
+        # - ipBlock: { cidr: 203.0.113.10/32 }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# API -> PostgreSQL (entrada do banco: somente a API; workers futuros precisam de regra própria)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-to-postgres
+  labels: { app.kubernetes.io/part-of: nina }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: postgresql }  # TODO(ADR-0006): ajustar ao PostgreSQL real
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: nina-api }
+      ports:
+        - { protocol: TCP, port: 5432 }
