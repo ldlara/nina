@@ -145,7 +145,7 @@ Prazos são **propostas de engenharia [a validar pelo jurídico]** (DJ-06). Prin
 | Exportações DSAR geradas | 7 dias, link assinado de uso limitado | Apagar | |
 | Mídia, diário, IA (futuro) | Definir no RIPD de cada módulo | | RB-011 |
 
-Exclusão de conta: janela de arrependimento de 14 dias com conta desativada (opcional, **validar**), depois exclusão definitiva e job de purga com prova (AuditEvent sem dados). Bebês com múltiplos cuidadores: ver 5.4.
+Exclusão de conta: janela de arrependimento de 7 dias (ADR-0010; parâmetro privacy.deletion_grace_days) com conta desativada (opcional, **validar**), depois exclusão definitiva e job de purga com prova (AuditEvent sem dados). Bebês com múltiplos cuidadores: ver 5.4.
 
 ---
 

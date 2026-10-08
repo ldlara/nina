@@ -1144,7 +1144,7 @@ CREATE TRIGGER account_deletion_request_guard BEFORE INSERT OR UPDATE ON nina.ac
 CREATE TABLE nina.privacy_request (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id             uuid NOT NULL REFERENCES nina.app_user(id),
-  request_type        text NOT NULL CHECK (request_type IN ('ACCESS', 'CORRECTION', 'EXPORT', 'ERASURE')),
+  request_type        text NOT NULL CHECK (request_type IN ('ACCESS', 'CORRECTION', 'EXPORT', 'ANONYMIZATION')),
   status              text NOT NULL DEFAULT 'REQUESTED' CHECK (status IN ('REQUESTED', 'COMPLETED', 'REJECTED', 'CANCELLED')),
   requested_at        timestamptz NOT NULL DEFAULT now(),
   due_at              timestamptz NOT NULL,                       -- requested_at + privacy.request_response_days (15)
@@ -1154,11 +1154,11 @@ CREATE TABLE nina.privacy_request (
   cancelled_at        timestamptz,
   closed_reason       text CHECK (length(closed_reason) <= 64),   -- codigo curto, sem PII
   CONSTRAINT privacy_verification_ck CHECK ((identity_verified_at IS NULL) = (verification_method IS NULL)),
-  CONSTRAINT privacy_erasure_verified_ck CHECK (request_type <> 'ERASURE' OR identity_verified_at IS NOT NULL)
+  CONSTRAINT privacy_erasure_verified_ck CHECK (request_type <> 'ANONYMIZATION' OR identity_verified_at IS NOT NULL)
 );
 CREATE UNIQUE INDEX privacy_request_open_uq ON nina.privacy_request (user_id, request_type) WHERE status = 'REQUESTED';
 CREATE INDEX privacy_request_due_ix ON nina.privacy_request (due_at) WHERE status = 'REQUESTED';
-COMMENT ON TABLE nina.privacy_request IS 'ADR-0010 item 3: caminho de DSAR para nao-Owner. ERASURE anonimiza dados pessoais proprios (fulfill_privacy_erasure) e nunca apaga dado de bebe.';
+COMMENT ON TABLE nina.privacy_request IS 'ADR-0010 item 3: caminho de DSAR para nao-Owner. ANONYMIZATION anonimiza dados pessoais proprios (fulfill_privacy_erasure) e nunca apaga dado de bebe.';
 
 -- -----------------------------------------------------------------------------
 -- 9. Exclusão (ADR-0008) e purga/retenção
@@ -1354,7 +1354,7 @@ END $$;
 
 -- ---- Requisicao de privacidade (ADR-0010 item 3) ----
 -- Abre o pedido do PROPRIO usuario (nina.user_id). A identidade ja foi verificada pela API (reautenticacao).
--- ERASURE nao e aceita de Owner ativo de bebe (NN013): ele usa a exclusao de conta, que trata os bebes.
+-- ANONYMIZATION nao e aceita de Owner ativo de bebe (NN013): ele usa a exclusao de conta, que trata os bebes.
 CREATE FUNCTION nina.open_privacy_request(p_type text, p_verification text DEFAULT 'REAUTHENTICATION') RETURNS uuid
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = nina, pg_temp AS $$
 DECLARE v_user uuid := nina.current_user_id(); v_id uuid; v_due timestamptz;
@@ -1362,10 +1362,10 @@ BEGIN
   IF v_user IS NULL OR NOT EXISTS (SELECT 1 FROM nina.app_user WHERE id = v_user AND status = 'ACTIVE') THEN
     RAISE EXCEPTION 'requisicao de privacidade exige usuario ativo no contexto (nina.user_id)' USING ERRCODE = 'NN015';
   END IF;
-  IF p_type = 'ERASURE' AND nina.is_active_baby_owner(v_user) THEN
+  IF p_type = 'ANONYMIZATION' AND nina.is_active_baby_owner(v_user) THEN
     RAISE EXCEPTION 'OWNER_MUST_USE_ACCOUNT_DELETION: Owner ativo exclui a conta pelo fluxo de exclusao (ADR-0010)' USING ERRCODE = 'NN013';
   END IF;
-  IF p_type = 'ERASURE' AND p_verification IS NULL THEN
+  IF p_type = 'ANONYMIZATION' AND p_verification IS NULL THEN
     RAISE EXCEPTION 'IDENTITY_NOT_VERIFIED: eliminacao exige verificacao de identidade' USING ERRCODE = 'NN014';
   END IF;
   v_due := now() + make_interval(days => nina.param_int('privacy.request_response_days', 15));
@@ -1391,7 +1391,7 @@ BEGIN
   VALUES (v_user, 'privacy.request_cancelled', 'PRIVACY_REQUEST', p_request, jsonb_build_object('request_id', p_request), true);
 END $$;
 
--- Worker: encerra ACCESS/CORRECTION/EXPORT (cumpridos pela API) como COMPLETED ou REJECTED. ERASURE so por fulfill.
+-- Worker: encerra ACCESS/CORRECTION/EXPORT (cumpridos pela API) como COMPLETED ou REJECTED. ANONYMIZATION so por fulfill.
 CREATE FUNCTION nina.close_privacy_request(p_request uuid, p_status text, p_reason text DEFAULT NULL, p_actor uuid DEFAULT NULL) RETURNS void
 LANGUAGE plpgsql AS $$
 DECLARE v_req nina.privacy_request%ROWTYPE;
@@ -1401,8 +1401,8 @@ BEGIN
   END IF;
   SELECT * INTO v_req FROM nina.privacy_request WHERE id = p_request AND status = 'REQUESTED' FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'requisicao inexistente ou ja encerrada' USING ERRCODE = 'NN015'; END IF;
-  IF v_req.request_type = 'ERASURE' AND p_status = 'COMPLETED' THEN
-    RAISE EXCEPTION 'ERASURE so e concluida por fulfill_privacy_erasure' USING ERRCODE = 'NN015';
+  IF v_req.request_type = 'ANONYMIZATION' AND p_status = 'COMPLETED' THEN
+    RAISE EXCEPTION 'ANONYMIZATION so e concluida por fulfill_privacy_erasure' USING ERRCODE = 'NN015';
   END IF;
   UPDATE nina.privacy_request SET status = p_status, completed_at = now(), closed_reason = left(p_reason, 64) WHERE id = p_request;
   INSERT INTO nina.audit_event (actor_user_id, actor_type, action, entity_type, entity_id, metadata_safe, is_critical)
@@ -1410,15 +1410,15 @@ BEGIN
           jsonb_build_object('request_type', v_req.request_type, 'status', p_status, 'on_time', now() <= v_req.due_at), true);
 END $$;
 
--- Worker: cumpre ERASURE de nao-Owner. Anonimiza os dados pessoais proprios (scrub_user_personal_data) e NAO apaga
+-- Worker: cumpre ANONYMIZATION de nao-Owner. Anonimiza os dados pessoais proprios (scrub_user_personal_data) e NAO apaga
 -- nada de bebe. Recusa Owner ativo (NN013) e pedido sem identidade verificada (NN014).
 CREATE FUNCTION nina.fulfill_privacy_erasure(p_request uuid, p_actor uuid DEFAULT NULL) RETURNS void
 LANGUAGE plpgsql AS $$
 DECLARE v_req nina.privacy_request%ROWTYPE; v_scrub jsonb;
 BEGIN
   SELECT * INTO v_req FROM nina.privacy_request WHERE id = p_request FOR UPDATE;
-  IF NOT FOUND OR v_req.request_type <> 'ERASURE' THEN
-    RAISE EXCEPTION 'requisicao ERASURE inexistente' USING ERRCODE = 'NN015';
+  IF NOT FOUND OR v_req.request_type <> 'ANONYMIZATION' THEN
+    RAISE EXCEPTION 'requisicao ANONYMIZATION inexistente' USING ERRCODE = 'NN015';
   END IF;
   IF v_req.status = 'COMPLETED' THEN RETURN; END IF;                  -- idempotente
   IF v_req.status <> 'REQUESTED' THEN
