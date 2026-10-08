@@ -11,7 +11,7 @@ Termos em `specs/glossary.md`. Identificadores em inglês.
 |---|---|
 | Identity | User, AuthSession (device), Credential, RecoveryRequest [P] |
 | Family | Baby, CaregiverMembership |
-| Tracking | SleepSession, FeedingSession, PumpingSession, DiaperEvent, SyncMutation/Tombstone [P] |
+| Tracking | SleepSession, WakeEvent [P], FeedingSession, PumpingSession, DiaperEvent, SyncMutation/Tombstone [P] |
 | SleepIntelligence | SleepSchedulePreference [P], SleepPrediction, referência por idade (config) |
 | Notifications | NotificationPreference, NotificationJob |
 | Subscriptions | Subscription |
@@ -38,9 +38,11 @@ Convenções: todo registro sincronizável tem `id` (UUID gerado no cliente), `v
 ### 2.3 Tracking
 
 **SleepSession [D]** — `baby_id`, `start_at`, `end_at` (nulo = em aberto), `sleep_type` (nap | night), `method_or_place` (opcional, texto curto ou enum a definir), `notes` (opcional), `source` (timer | manual).
-**FeedingSession [D]** — `baby_id`, `feeding_type` (breast | bottle), `start_at`, `end_at` (obrigatório para breast; opcional para bottle), `side` (left | right | both; só breast), `volume_ml` (só bottle), `milk_type` (opcional; só bottle), `notes`.
+**FeedingSession [D]** — `baby_id`, `feeding_type` (BREASTFEEDING | BOTTLE | SOLID | OTHER), `start_at`, `end_at` (obrigatório no MVP), `side` (LEFT | RIGHT | BOTH; só BREASTFEEDING), `volume_ml` (só BOTTLE), `milk_type` (BREAST_MILK | FORMULA | MIXED | OTHER | UNSPECIFIED; **só quando BOTTLE, senão nulo**), `notes`. Enums extensíveis. (ADR-0009)
 **PumpingSession [D]** — `baby_id`, `start_at`, `end_at`, `volume_ml` (opcional), `side` [P, opcional].
-**DiaperEvent [D]** — `baby_id`, `occurred_at`, `diaper_type` (valores a definir; dúvida D-08), `notes`.
+**DiaperEvent [D]** — `baby_id`, `occurred_at`, `diaper_type` (WET | DIRTY | MIXED | DRY | UNSPECIFIED), `notes`. (ADR-0009)
+
+**WakeEvent [P]** — `id`, `sleep_session_id`, `started_at`, `ended_at`, `duration_seconds`, `source` (MANUAL | INFERRED | IMPORT). Fonte da verdade dos despertares noturnos; `night_awakenings` é valor derivado (null = dados insuficientes; 0 = acompanhamento suficiente sem despertar). Sincronizável (change log/tombstone). (ADR-0009)
 **Tombstone [P]** — `entity_type`, `entity_id`, `baby_id`, `deleted_at`, `version`, `expires_at` (janela de retenção, dúvida D-06).
 **SyncMutation [P]** (cliente e servidor) — `mutation_id` (UUID), `device_id`, `entity_type`, `entity_id`, `op` (create | update | delete), `base_version`, `client_created_at`, `payload`, `state` (pending | sent | acked | conflict).
 
@@ -165,7 +167,7 @@ Definições
 - Idade cronológica(t) = intervalo entre `birth_date` e a data `t`, avaliada no fuso do bebê. Exibível em dias, semanas completas e meses completos; unidade por faixa é decisão de UX.
 - Idade corrigida(t), quando aplicável = idade cronológica(t) menos o intervalo entre `birth_date` e `due_date` (ou seja, intervalo entre a DPP e `t`). Calculada em tempo de consulta, nunca persistida como dado independente.
 - Se `due_date` ausente: idade corrigida não existe; todas as regras usam a idade cronológica.
-- Se `due_date` <= `birth_date` (nascimento a termo ou depois): não há correção; idade corrigida = idade cronológica (nunca negativa).
+- Se `due_date` <= `birth_date` (a termo ou depois), ou fora da janela de aplicação (parâmetro editável no banco): a correção **não se aplica** e `corrected_days = null` ("não se aplica", não "desconhecido"); `correction_applied = false`. Contrato: `ageCalculation {chronologicalDays, correctedDays, correctionApplied}`. (ADR-0009, substitui a regra anterior)
 - Se `t` < `due_date` (ainda antes da DPP): idade corrigida é negativa; a exibição e o uso nas regras são tratados como "pré-termo" e dependem da política D-01.
 
 Regras de uso
@@ -208,3 +210,7 @@ AccountDeletionRequest: `requested` --> `scheduled` --> `completed` (ou `cancell
 | D-13 | Regra de atribuição a um dia de sessões que cruzam meia-noite e limite de "dia" (corte). | RF-010, RF-028 |
 
 (Os IDs D-02 e D-03 estão reservados em `specs/product-spec.md` seção 9; a lista consolidada está lá.)
+
+
+## Atualização ADR-0009 (2026-10-08)
+Decisões de domínio resolvidas: idade corrigida derivada e nula quando não aplicável; enums de fralda/alimentação/leite; WakeEvent e despertares derivados; exclusão de conta em cascata por padrão (flag); somente Owner edita o bebê e exclui a conta; sono sobreposto aceito e sinalizado (flag). Ver docs/project/decisions/ADR-0009-convencoes-de-contrato-e-dominio.md.

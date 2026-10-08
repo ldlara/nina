@@ -451,18 +451,18 @@ Nenhuma bloqueia a escrita da spec; as marcadas "bloqueia teste" impedem a verif
 
 | ID | Dúvida | Afeta | Dono sugerido |
 |---|---|---|---|
-| D-01 | **Política de idade corrigida para prematuros**: critério de "aplicável" (idade gestacional não é campo do discovery), limite de idade, opt-out manual, uso no motor de sono. Bloqueia teste. | RF-005, RF-011 | produto + especialista clínico |
+| D-01 | **[resolvido em parte pelo ADR-0009: janela de aplicação é parâmetro editável; valor padrão ainda a definir com especialista]** **Política de idade corrigida para prematuros**: critério de "aplicável" (idade gestacional não é campo do discovery), limite de idade, opt-out manual, uso no motor de sono. Bloqueia teste. | RF-005, RF-011 | produto + especialista clínico |
 | D-02 | Preço e limites do plano free × premium (o que é gratuito). | RF-041 | product-owner |
 | D-03 | Cloud alvo, provedor de push (APNs/FCM diretos) e revisão jurídica/LGPD (Privacy Gate) antes de usuários reais; base legal por finalidade. | RF-039, RF-003, RF-040 | cloud, privacidade |
 | D-04 | Entitlement é por usuário ou por família/bebê? Política de herança para cuidadores. Bloqueia teste. | RF-041, RF-043 | produto |
 | D-05 | Sobreposição de sessões de sono: rejeitar, mesclar ou sinalizar. Bloqueia teste. | RF-008 | produto + UX |
 | D-06 | Janela de retenção de tombstone e formato do cursor (pendências do ADR-0003). | RF-047 | backend-architect |
-| D-07 | Janela de arrependimento da exclusão, prazos de retenção e o que a lei obriga reter. | RF-045, RF-055 | privacidade/jurídico |
-| D-08 | Conjuntos de valores: tipos de fralda, tipos de leite, método/local de sono. Bloqueia teste. | RF-008, 016, 018 | produto + UX |
+| D-07 | **[janela de arrependimento confirmada (ADR-0009); prazos de retenção seguem com o jurídico]** Janela de arrependimento da exclusão, prazos de retenção e o que a lei obriga reter. | RF-045, RF-055 | privacidade/jurídico |
+| D-08 | **[RESOLVIDO (ADR-0009): DiaperType, FeedingType, MilkType; método/local de sono segue aberto]** Conjuntos de valores: tipos de fralda, tipos de leite, método/local de sono. Bloqueia teste. | RF-008, 016, 018 | produto + UX |
 | D-09 | Foto de perfil do bebê: armazenamento e tratamento de mídia no MVP. | RF-004 | arquitetura |
 | D-10 | Categoria "fases de desenvolvimento" em RF-037 sem conteúdo no MVP: exibir desabilitada ou ocultar. | RF-037 | produto |
 | D-11 | Permitir perfil pré-natal (só DPP, sem nascimento)? | RF-004 | produto |
-| D-12 | Como registrar e contar despertares noturnos. Bloqueia teste. | RF-010 | produto |
+| D-12 | **[RESOLVIDO (ADR-0009): WakeEvent + night_awakenings derivado (null/0/N)]** Como registrar e contar despertares noturnos. Bloqueia teste. | RF-010 | produto |
 | D-13 | Atribuição de sessões que cruzam meia-noite a dias e corte do "dia". Bloqueia teste. | RF-010, RF-028 | produto |
 | D-14 | **Contagem**: o pedido cita 45 RFs, mas a lista fornecida e `specification.md` somam 37. Confirmar se faltam RFs no escopo (quais) ou se o número é um erro. | escopo | product-owner |
 | D-15 | Personas são hipóteses sem pesquisa; validar com entrevistas. | seção 2 | UX |
@@ -494,3 +494,7 @@ Nenhuma bloqueia a escrita da spec; as marcadas "bloqueia teste" impedem a verif
 | D-41 | Baseline de versões iOS/Android (RNF-016) e meta formal de RPO/RTO (RNF-012). | NFR | arquitetura/SRE |
 
 Suposições vigentes (specification.md): S1 PT-BR primeiro; S2 previsão por regras sem ML; S3 plano free + um premium; S4 conteúdo original (V1); S5 sem IA nem comunidade; S6 monorepo.
+
+
+## Atualização ADR-0009 (2026-10-08)
+Resolvidos: cadastro só ativo após confirmação por e-mail; escrita de eventos via /sync/push; exclusão de conta com janela de arrependimento, só Owner, em cascata por padrão (flag); sono sobreposto aceito e sinalizado (flag); adicional do premium não precisa ser cuidador ativo. Critérios marcados `[teste bloqueado]` por D-08/D-12 podem ser escritos agora; D-01 (valor padrão da janela) e D-13 seguem abertos.
