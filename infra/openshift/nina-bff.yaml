@@ -23,6 +23,11 @@ spec:
             - { name: http, containerPort: 8080 }
           envFrom:
             - configMapRef: { name: nina-config }
+          env:
+            # Segredo compartilhado BFF<->API (>= 32 caracteres). Sem ele nenhum dos dois sobe em Production (NR-02).
+            - name: Internal__SharedSecret
+              valueFrom:
+                secretKeyRef: { name: nina-internal, key: Internal__SharedSecret }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

@@ -48,6 +48,7 @@ services:
     environment:
       ConnectionStrings__Default: Host=postgres;Database=nina;Username=nina_app;Password=${NINA_APP_PASSWORD:?defina NINA_APP_PASSWORD no .env}
       ASPNETCORE_ENVIRONMENT: Development
+      Internal__SharedSecret: ${INTERNAL_SHARED_SECRET:?defina INTERNAL_SHARED_SECRET no .env (>= 32 caracteres)}
     # Só o código-fonte do backend (sem .env, .git, specs, mobile). Ajuste se o build precisar de mais.
     volumes: ["./backend:/src/backend"]
     ports: ["127.0.0.1:5080:8080"]
@@ -61,6 +62,7 @@ services:
     environment:
       Api__BaseUrl: http://api:8080
       ASPNETCORE_ENVIRONMENT: Development
+      Internal__SharedSecret: ${INTERNAL_SHARED_SECRET:?defina INTERNAL_SHARED_SECRET no .env (>= 32 caracteres)}
     volumes: ["./backend:/src/backend"]
     ports: ["127.0.0.1:5081:8080"]
     depends_on: [api]

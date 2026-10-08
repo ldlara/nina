@@ -24,6 +24,10 @@ spec:
           envFrom:
             - configMapRef: { name: nina-config }
           env:
+            # Segredo compartilhado BFF<->API (>= 32 caracteres). Sem ele nenhum dos dois sobe em Production (NR-02).
+            - name: Internal__SharedSecret
+              valueFrom:
+                secretKeyRef: { name: nina-internal, key: Internal__SharedSecret }
             # Login do papel nina_app (sujeito a RLS). Nunca o dono/superusuário (SR-018).
             - name: ConnectionStrings__Default
               valueFrom:

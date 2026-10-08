@@ -30,8 +30,9 @@ public sealed class OutboxTests(PgCluster cluster) : DbTestBase(cluster)
                 "last_error_code" => "'X'",
                 _ => "now()",
             };
-            Assert.Equal("42501", await FailsAsync(Role.App, W.Dave,
-                $"INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type, payload, {column}) VALUES ('USER', '{W.Dave}', 'SecurityNoticeRequested', '{{\"notice\": \"PASSWORD_CHANGED\"}}', {value})"), column);
+            var state = await FailsAsync(Role.App, W.Dave,
+                $"INSERT INTO nina.outbox_message (aggregate_type, aggregate_id, event_type, payload, {column}) VALUES ('USER', '{W.Dave}', 'SecurityNoticeRequested', '{{\"notice\": \"PASSWORD_CHANGED\"}}', {value})");
+            Assert.True(state == "42501", $"coluna {column}: esperado 42501, obtido {state ?? "sucesso"}");
         }
 
         Assert.Equal(0, await OwnerScalarAsync<long>("SELECT count(*) FROM nina.outbox_message"));
