@@ -693,6 +693,14 @@ BEGIN
   END IF;
 END $$;
 
+-- NR-07: o vinculo do usuario com um bebe EXCLUIDO (inclusive o encerrado) deixa de ser legivel pelo app; a trilha fica na auditoria.
+-- So responde "true" a quem tem vinculo com o bebe (para qualquer outro UUID, false: sem oraculo de bebe excluido) e false no instante
+-- do INSERT de um vinculo novo (bebe vivo), o que preserva INSERT ... RETURNING.
+CREATE FUNCTION nina.own_link_on_deleted_baby(p_baby uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = nina, pg_temp AS
+$$ SELECT EXISTS (SELECT 1 FROM nina.baby b JOIN nina.caregiver_membership m ON m.baby_id = b.id AND m.user_id = nina.current_user_id()
+                   WHERE b.id = p_baby AND b.deleted_at IS NOT NULL) $$;
+
 CREATE FUNCTION nina.is_family_owner(p_family uuid) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = nina, pg_temp AS
 $$ SELECT EXISTS (SELECT 1 FROM nina.family f WHERE f.id = p_family AND f.owner_user_id = nina.current_user_id()) $$;
@@ -3114,7 +3122,7 @@ CREATE POLICY app_update ON nina.baby FOR UPDATE TO nina_app
 -- (nunca ACTIVE, nunca OWNER); bootstrap do primeiro Owner. NAO ha politica nem grant de UPDATE/DELETE: so as funcoes da secao 10.
 ALTER TABLE nina.caregiver_membership ENABLE ROW LEVEL SECURITY;
 CREATE POLICY app_select ON nina.caregiver_membership FOR SELECT TO nina_app
-  USING (user_id = nina.current_user_id() OR nina.baby_role(baby_id) = 'OWNER');
+  USING ((user_id = nina.current_user_id() AND NOT nina.own_link_on_deleted_baby(baby_id)) OR nina.baby_role(baby_id) = 'OWNER');
 CREATE POLICY app_insert ON nina.caregiver_membership FOR INSERT TO nina_app
   WITH CHECK (
     (nina.baby_role(baby_id) = 'OWNER' AND status = 'PENDING' AND role IN ('CAREGIVER', 'READ_ONLY')
@@ -3217,7 +3225,7 @@ GRANT EXECUTE ON FUNCTION nina.current_user_id(), nina.param_int(text, integer),
 GRANT EXECUTE ON FUNCTION nina.jsonb_pii_ok(jsonb, integer), nina.pii_key(text) TO nina_app, nina_worker;
 -- helpers de RLS (executados pelo planner com o papel corrente)
 GRANT EXECUTE ON FUNCTION nina.baby_role(uuid), nina.can_read_baby(uuid), nina.can_write_baby(uuid), nina.is_family_owner(uuid),
-  nina.can_bootstrap_owner(uuid), nina.baby_ever_had_owner(uuid), nina.readable_babies(), nina.writable_babies(),
+  nina.can_bootstrap_owner(uuid), nina.baby_ever_had_owner(uuid), nina.readable_babies(), nina.writable_babies(), nina.own_link_on_deleted_baby(uuid),
   nina.owns_entitlement(uuid), nina.is_entitlement_member(uuid) TO nina_app;
 -- funcoes de negocio do app (todas SECURITY DEFINER, ator = nina.user_id)
 GRANT EXECUTE ON FUNCTION nina.my_plan_code(), nina.my_has_feature(text), nina.sync_head(uuid), nina.my_audit_events(integer, bigint),
