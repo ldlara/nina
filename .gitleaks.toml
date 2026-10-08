@@ -1,0 +1,20 @@
+title = "Nina gitleaks"
+
+[extend]
+useDefault = true
+
+# Valores fictícios de teste e exemplos de documentação (não são segredos).
+# A exceção vale SOMENTE para a regra generic-api-key e para estes caminhos.
+[[allowlists]]
+description = "Senhas/tokens fictícios em testes e exemplos em contrato/specs"
+targetRules = ["generic-api-key"]
+paths = [
+  '''^ios/.*/Tests/''',
+  '''^ios/App/NinaTests/''',
+  '''^android/app/src/test/''',
+  '''^backend/tests/''',
+  '''^backend/spikes/''',
+  '''^contracts/openapi\.yaml$''',
+  '''^specs/.*\.md$''',
+  '''^docs/.*\.md$''',
+]
