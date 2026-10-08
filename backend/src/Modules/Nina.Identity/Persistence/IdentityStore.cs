@@ -11,7 +11,8 @@ public sealed record UserRow(
     string? Timezone,
     string Status,
     DateTimeOffset CreatedAt,
-    string? PasswordHash);
+    string? PasswordHash,
+    string? DisplayName = null);
 
 public sealed record SessionRow(
     Guid Id,
@@ -37,9 +38,10 @@ public sealed record ConsentRow(
 /// <summary>Consultas e comandos SQL do Identity. Cada método roda dentro de uma transação já aberta (e com contexto de RLS quando preciso).</summary>
 public static class IdentityStore
 {
+    // Leitura do PRÓPRIO usuário (RLS por nina.user_id: SR-003). A busca por e-mail, sem sessão, usa a função auth_lookup_user_by_email.
     private const string UserSelect =
         """
-        SELECT u.id, u.email, u.email_verified_at, u.locale, u.timezone, u.status, u.created_at, c.password_hash
+        SELECT u.id, u.email, u.email_verified_at, u.locale, u.timezone, u.status, u.created_at, c.password_hash, u.display_name
           FROM nina.app_user u LEFT JOIN nina.user_credential c ON c.user_id = u.id
         """;
 
@@ -52,18 +54,22 @@ public static class IdentityStore
     // ---------------------------------------------------------------- usuários
 
     public static Task<UserRow?> FindUserByEmailAsync(DbTx tx, string normalizedEmail) =>
-        tx.QueryFirstAsync(UserSelect + " WHERE u.email_normalized = lower(btrim(@e))", ReadUser, Db.Text("e", normalizedEmail));
+        tx.QueryFirstAsync(
+            "SELECT id, email, email_verified_at, locale, timezone, status, created_at, password_hash, display_name FROM nina.auth_lookup_user_by_email(@e)",
+            ReadUser, Db.Text("e", normalizedEmail));
 
     public static Task<UserRow?> FindUserByIdAsync(DbTx tx, Guid id) =>
         tx.QueryFirstAsync(UserSelect + " WHERE u.id = @id", ReadUser, Db.Uuid("id", id));
 
-    public static Task InsertUserAsync(DbTx tx, Guid id, string email, string locale, string? timezone, DateTimeOffset? verifiedAt, DateTimeOffset now) =>
+    /// <summary>Exige <c>tx.SetUserAsync(id)</c> antes: a RLS só deixa o usuário inserir a própria linha.</summary>
+    public static Task InsertUserAsync(
+        DbTx tx, Guid id, string email, string locale, string? timezone, DateTimeOffset? verifiedAt, DateTimeOffset now, string? displayName = null) =>
         tx.ExecAsync(
             """
-            INSERT INTO nina.app_user (id, email, email_verified_at, locale, timezone, created_at, updated_at)
-            VALUES (@id, @email, @verified, @locale, @tz, @now, @now)
+            INSERT INTO nina.app_user (id, email, email_verified_at, display_name, locale, timezone, created_at, updated_at)
+            VALUES (@id, @email, @verified, @display, @locale, @tz, @now, @now)
             """,
-            Db.Uuid("id", id), Db.Text("email", email), Db.Timestamp("verified", verifiedAt),
+            Db.Uuid("id", id), Db.Text("email", email), Db.Timestamp("verified", verifiedAt), Db.Text("display", displayName),
             Db.Text("locale", locale), Db.Text("tz", timezone), Db.Timestamp("now", now));
 
     public static Task MarkEmailVerifiedAsync(DbTx tx, Guid userId, DateTimeOffset now) =>
@@ -71,10 +77,16 @@ public static class IdentityStore
             "UPDATE nina.app_user SET email_verified_at = COALESCE(email_verified_at, @now) WHERE id = @id",
             Db.Uuid("id", userId), Db.Timestamp("now", now));
 
-    public static Task UpdateProfileAsync(DbTx tx, Guid userId, string? locale, string? timezone) =>
+    public static Task UpdateProfileAsync(DbTx tx, Guid userId, string? displayName, string? locale, string? timezone) =>
         tx.ExecAsync(
-            "UPDATE nina.app_user SET locale = COALESCE(@locale, locale), timezone = COALESCE(@tz::nina.iana_tz, timezone) WHERE id = @id",
-            Db.Uuid("id", userId), Db.Text("locale", locale), Db.Text("tz", timezone));
+            """
+            UPDATE nina.app_user
+               SET display_name = COALESCE(NULLIF(btrim(@display), ''), display_name),
+                   locale = COALESCE(@locale, locale),
+                   timezone = COALESCE(@tz::nina.iana_tz, timezone)
+             WHERE id = @id
+            """,
+            Db.Uuid("id", userId), Db.Text("display", displayName), Db.Text("locale", locale), Db.Text("tz", timezone));
 
     public static Task UpsertCredentialAsync(DbTx tx, Guid userId, string hash, DateTimeOffset now) =>
         tx.ExecAsync(
@@ -96,7 +108,7 @@ public static class IdentityStore
 
     public static Task<IdentityRow?> FindIdentityAsync(DbTx tx, string provider, string subject) =>
         tx.QueryFirstAsync(
-            "SELECT provider, provider_subject, linked_at, user_id FROM nina.user_identity WHERE provider = @p AND provider_subject = @s",
+            "SELECT provider, provider_subject, linked_at, user_id FROM nina.auth_lookup_identity(@p, @s)",
             r => new IdentityRow(r.GetString(0), r.GetString(1), r.GetFieldValue<DateTimeOffset>(2), r.GetGuid(3)),
             Db.Text("p", provider), Db.Text("s", subject));
 
@@ -122,27 +134,20 @@ public static class IdentityStore
         return value is { } v ? new DateTimeOffset(DateTime.SpecifyKind(v, DateTimeKind.Utc)) : null;
     }
 
-    /// <summary>Consome (marca como usado) o código/token se ainda for válido. Devolve o usuário dono ou null.</summary>
+    /// <summary>Consome (marca como usado) o código/token se ainda for válido (função definer: a busca é pelo hash, sem sessão). Devolve o usuário dono ou null.</summary>
     public static Task<Guid?> ConsumeRecoveryAsync(DbTx tx, byte[] hash, DateTimeOffset now) =>
         tx.ScalarAsync<Guid?>(
-            """
-            UPDATE nina.recovery_request SET used_at = @now
-             WHERE token_hash = @h AND used_at IS NULL AND expires_at > @now
-            RETURNING user_id
-            """,
+            "SELECT nina.auth_consume_recovery(@h, @now)",
             Db.Bytes("h", hash), Db.Timestamp("now", now));
 
     /// <summary>
-    /// Registra um segredo de uso único (hash) no livro-razão <c>recovery_request</c> já marcado como usado; false se já existia.
-    /// A unicidade de <c>token_hash</c> torna a operação atômica entre instâncias (usado para o <c>jti</c> de reautenticação).
+    /// Registra o <c>jti</c> de reautenticação (hash) no livro-razão <c>nina.reauth_jti</c> (uso único atômico entre instâncias, com escopo e
+    /// contador de reapresentações); false se já existia. Exige <c>tx.SetUserAsync</c>.
     /// </summary>
-    public static async Task<bool> TryConsumeOneTimeAsync(DbTx tx, Guid userId, byte[] hash, DateTimeOffset now, DateTimeOffset expires) =>
-        await tx.ExecAsync(
-            """
-            INSERT INTO nina.recovery_request (user_id, token_hash, created_at, expires_at, used_at)
-            VALUES (@u, @h, @now, @exp, @now) ON CONFLICT (token_hash) DO NOTHING
-            """,
-            Db.Uuid("u", userId), Db.Bytes("h", hash), Db.Timestamp("now", now), Db.Timestamp("exp", expires)) == 1;
+    public static async Task<bool> TryConsumeReauthJtiAsync(DbTx tx, byte[] hash, string scope, Guid sessionId, DateTimeOffset expires) =>
+        await tx.ScalarAsync<bool>(
+            "SELECT nina.consume_reauth_jti(@h, @scope, @s, @exp)",
+            Db.Bytes("h", hash), Db.Text("scope", scope), Db.Uuid("s", sessionId), Db.Timestamp("exp", expires));
 
     public static Task InvalidateOpenRecoveryAsync(DbTx tx, Guid userId, DateTimeOffset now) =>
         tx.ExecAsync(
@@ -233,18 +238,19 @@ public static class IdentityStore
             """,
             Db.Uuid("u", userId), Db.Uuid("d", deviceId), Db.Timestamp("now", now));
 
+    /// <summary>
+    /// Função definer <c>register_push_token</c>: idempotente por (usuário, dispositivo, plataforma) e trata a troca de dono do aparelho
+    /// (token de usuário sem sessão ativa no dispositivo é reatribuído; com sessão ativa, 23505 = conflito). O usuário é o do contexto.
+    /// </summary>
     public static async Task<(DateTimeOffset Created, DateTimeOffset Updated)?> UpsertPushTokenAsync(
-        DbTx tx, Guid userId, Guid deviceId, string platform, string token, DateTimeOffset now)
+        DbTx tx, Guid deviceId, string platform, string token, string? environment, string? locale, string? appVersion,
+        bool? osNotificationsAuthorized, DateTimeOffset now)
     {
         var row = await tx.QueryFirstAsync(
-            """
-            INSERT INTO nina.device_push_token (user_id, device_id, platform, token, created_at, last_seen_at)
-            VALUES (@u, @d, @p, @t, @now, @now)
-            ON CONFLICT (user_id, device_id, platform) DO UPDATE SET token = EXCLUDED.token, last_seen_at = EXCLUDED.last_seen_at
-            RETURNING created_at, last_seen_at
-            """,
+            "SELECT created_at, last_seen_at FROM nina.register_push_token(@d, @p, @t, @env, @loc, @app, @os, @now)",
             r => Tuple.Create(r.GetFieldValue<DateTimeOffset>(0), r.GetFieldValue<DateTimeOffset>(1)),
-            Db.Uuid("u", userId), Db.Uuid("d", deviceId), Db.Text("p", platform), Db.Text("t", token), Db.Timestamp("now", now));
+            Db.Uuid("d", deviceId), Db.Text("p", platform), Db.Text("t", token), Db.Text("env", environment), Db.Text("loc", locale),
+            Db.Text("app", appVersion), Db.P("os", osNotificationsAuthorized, NpgsqlTypes.NpgsqlDbType.Boolean), Db.Timestamp("now", now));
         return row is null ? null : (row.Item1, row.Item2);
     }
 
@@ -300,7 +306,8 @@ public static class IdentityStore
         r.IsDBNull(4) ? null : r.GetString(4),
         r.GetString(5),
         r.GetFieldValue<DateTimeOffset>(6),
-        r.IsDBNull(7) ? null : r.GetString(7));
+        r.IsDBNull(7) ? null : r.GetString(7),
+        r.IsDBNull(8) ? null : r.GetString(8));
 
     private static SessionRow ReadSession(NpgsqlDataReader r) => new(
         r.GetGuid(0),

@@ -46,8 +46,7 @@ public sealed class AccountService(
 
         return await db.InTransactionAsync(userId, async tx =>
         {
-            // display_name não é persistido: o schema 0001 não tem a coluna (ver relatório BE-001).
-            await IdentityStore.UpdateProfileAsync(tx, userId, locale, timezone);
+            await IdentityStore.UpdateProfileAsync(tx, userId, req.DisplayName, locale, timezone);
             var user = await IdentityStore.FindUserByIdAsync(tx, userId) ?? throw ProblemException.Unauthorized("INVALID_TOKEN", "Invalid token");
             return await UserMapper.ToDtoAsync(tx, user, Opt.DefaultLocale);
         }, ct);
@@ -178,7 +177,7 @@ public sealed class AccountService(
             v.Add(new FieldError("environment", "UNSUPPORTED_VALUE"));
         }
 
-        v.Locale("locale", req.Locale);
+        var pushLocale = v.Locale("locale", req.Locale);
         if (req.AppVersion is { Length: > 32 })
         {
             v.Add(new FieldError("app_version", "TOO_LONG"));
@@ -198,7 +197,8 @@ public sealed class AccountService(
                     throw ProblemException.Validation(new FieldError("platform", "PLATFORM_MISMATCH"));
                 }
 
-                var row = await IdentityStore.UpsertPushTokenAsync(tx, userId, deviceId, req.Platform!, token!, now)
+                var row = await IdentityStore.UpsertPushTokenAsync(
+                              tx, deviceId, req.Platform!, token!, req.Environment, pushLocale, req.AppVersion, req.OsNotificationsAuthorized, now)
                           ?? throw ProblemException.NotFound();
                 await audit.AppendAsync(tx, new AuditEntry("push_token.registered", userId, "device", deviceId, deviceId));
                 return new PushTokenDto(deviceId, req.Platform!, row.Created, row.Updated);

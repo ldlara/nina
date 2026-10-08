@@ -124,13 +124,16 @@ public sealed partial class AuthService(
         Guid userId;
         if (existing is null)
         {
+            // A RLS (SR-003) só deixa o usuário inserir a própria linha: o contexto vem antes do INSERT.
             userId = Guid.NewGuid();
-            await IdentityStore.InsertUserAsync(tx, userId, email, locale, timezone, null, now);
+            await tx.SetUserAsync(userId);
+            await IdentityStore.InsertUserAsync(tx, userId, email, locale, timezone, null, now, req.DisplayName);
         }
         else
         {
             // Cadastro ainda não confirmado: respeita o intervalo de reenvio e substitui a senha (anti pré-sequestro).
             userId = existing.Id;
+            await tx.SetUserAsync(userId);
             var last = await IdentityStore.LastRecoveryCreatedAsync(tx, userId);
             if (last is { } l && now - l < TimeSpan.FromSeconds(Opt.ResendAfterSeconds))
             {
@@ -138,7 +141,6 @@ public sealed partial class AuthService(
             }
         }
 
-        await tx.SetUserAsync(userId);
         await IdentityStore.UpsertCredentialAsync(tx, userId, hash, now);
         await IdentityStore.InvalidateOpenRecoveryAsync(tx, userId, now);
         await IdentityStore.InsertRecoveryAsync(tx, userId, VerificationHash(userId, code), now, now.AddMinutes(Opt.VerificationCodeMinutes));
@@ -181,6 +183,7 @@ public sealed partial class AuthService(
                 return null;
             }
 
+            await tx.SetUserAsync(user.Id);
             await IdentityStore.MarkEmailVerifiedAsync(tx, user.Id, now);
             var verified = user with { EmailVerifiedAt = now };
             return await issuer.IssueAsync(tx, verified, device!, "auth.email_verified", "EMAIL_CODE");
@@ -294,6 +297,7 @@ public sealed partial class AuthService(
             var link = await IdentityStore.FindIdentityAsync(tx, provider, identity.Subject);
             if (link is not null)
             {
+                await tx.SetUserAsync(link.UserId);
                 var linked = await IdentityStore.FindUserByIdAsync(tx, link.UserId)
                              ?? throw ProblemException.Unauthorized("INVALID_ID_TOKEN", "Invalid identity token");
                 return await issuer.IssueAsync(tx, linked, device, "auth.login", provider);
@@ -327,8 +331,8 @@ public sealed partial class AuthService(
 
             var userId = Guid.NewGuid();
             var effectiveLocale = locale ?? Opt.DefaultLocale;
-            await IdentityStore.InsertUserAsync(tx, userId, email, effectiveLocale, timezone, now, now);
             await tx.SetUserAsync(userId);
+            await IdentityStore.InsertUserAsync(tx, userId, email, effectiveLocale, timezone, now, now);
             await IdentityStore.InsertIdentityAsync(tx, userId, provider, identity.Subject, email, now);
             await consents.RecordOnboardingAsync(tx, userId, accepted, effectiveLocale, device);
             await audit.AppendAsync(tx, new AuditEntry("auth.register", userId, "user", userId, device.DeviceId, Metadata: new Dictionary<string, object?> { ["method"] = provider }));
@@ -475,6 +479,7 @@ public sealed partial class AuthService(
                 return null;
             }
 
+            await tx.SetUserAsync(user.Id);
             await IdentityStore.InsertRecoveryAsync(tx, user.Id, ResetHash(token), now, now.AddMinutes(Opt.PasswordResetMinutes));
             await audit.AppendAsync(tx, new AuditEntry("auth.password_reset_requested", user.Id, "user", user.Id));
             return user.Locale ?? Opt.DefaultLocale;
@@ -655,7 +660,7 @@ public sealed partial class AuthService(
     private async Task AuditFailureAsync(string action, Guid? userId, Guid? deviceId, CancellationToken ct)
     {
         await db.InTransactionAsync(null, tx => audit.AppendAsync(tx, new AuditEntry(
-            action, userId, userId is null ? null : "user", userId, deviceId, "FAILURE")), ct);
+            action, userId, userId is null ? null : "user", userId, deviceId, "FAILURE", PreAuth: true)), ct);
     }
 
     // Falha de envio não pode diferenciar e-mail novo de existente (anti-enumeração); registra só o tipo do erro.

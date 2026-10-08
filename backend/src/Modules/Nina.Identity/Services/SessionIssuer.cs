@@ -16,7 +16,7 @@ public static class UserMapper
             user.Id,
             user.Email,
             user.EmailVerifiedAt is not null,
-            null, // display_name: o schema 0001 não tem coluna em app_user (lacuna registrada no relatório BE-001).
+            user.DisplayName,
             user.Locale ?? defaultLocale,
             user.Timezone,
             user.Status,

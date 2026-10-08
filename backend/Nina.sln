@@ -35,6 +35,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nina.SharedKernel", "src\Ni
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nina.Identity.Tests", "tests\Nina.Identity.Tests\Nina.Identity.Tests.csproj", "{82CF3B4A-5218-440E-8016-4A94D9AB8626}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nina.Database.Tests", "tests\Nina.Database.Tests\Nina.Database.Tests.csproj", "{F2915369-5EE4-4989-AF9E-698D9EE65ECD}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -201,6 +203,18 @@ Global
 		{82CF3B4A-5218-440E-8016-4A94D9AB8626}.Release|x64.Build.0 = Release|Any CPU
 		{82CF3B4A-5218-440E-8016-4A94D9AB8626}.Release|x86.ActiveCfg = Release|Any CPU
 		{82CF3B4A-5218-440E-8016-4A94D9AB8626}.Release|x86.Build.0 = Release|Any CPU
+		{F2915369-5EE4-4989-AF9E-698D9EE65ECD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F2915369-5EE4-4989-AF9E-698D9EE65ECD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F2915369-5EE4-4989-AF9E-698D9EE65ECD}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{F2915369-5EE4-4989-AF9E-698D9EE65ECD}.Debug|x64.Build.0 = Debug|Any CPU
+		{F2915369-5EE4-4989-AF9E-698D9EE65ECD}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{F2915369-5EE4-4989-AF9E-698D9EE65ECD}.Debug|x86.Build.0 = Debug|Any CPU
+		{F2915369-5EE4-4989-AF9E-698D9EE65ECD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F2915369-5EE4-4989-AF9E-698D9EE65ECD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F2915369-5EE4-4989-AF9E-698D9EE65ECD}.Release|x64.ActiveCfg = Release|Any CPU
+		{F2915369-5EE4-4989-AF9E-698D9EE65ECD}.Release|x64.Build.0 = Release|Any CPU
+		{F2915369-5EE4-4989-AF9E-698D9EE65ECD}.Release|x86.ActiveCfg = Release|Any CPU
+		{F2915369-5EE4-4989-AF9E-698D9EE65ECD}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -220,5 +234,6 @@ Global
 		{F5D9C56C-FAAA-4A4F-A694-F6EB49CF3EA0} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{E5CA9FF4-2FFF-4B63-9917-14CF456A58A4} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{82CF3B4A-5218-440E-8016-4A94D9AB8626} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{F2915369-5EE4-4989-AF9E-698D9EE65ECD} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

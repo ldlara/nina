@@ -11,7 +11,7 @@ namespace Nina.Identity.Services;
 /// Valida e consome o <c>X-Reauth-Token</c> (SR-013.1): assinatura/<c>typ</c>/<c>aud</c>, usuário e sessão corretos, escopo da
 /// operação e <b>uso único</b> do <c>jti</c> (livro-razão atômico no banco, válido entre instâncias).
 /// </summary>
-public sealed class ReauthService(TokenService tokens, NinaDb db, SecretKeys keys, AuditLog audit, TimeProvider time) : IReauthVerifier
+public sealed class ReauthService(TokenService tokens, NinaDb db, SecretKeys keys, AuditLog audit) : IReauthVerifier
 {
     public async Task<ReauthProof> RequireAsync(ClaimsPrincipal user, string? reauthToken, string requiredScope, CancellationToken cancellationToken)
     {
@@ -23,11 +23,10 @@ public sealed class ReauthService(TokenService tokens, NinaDb db, SecretKeys key
             throw Denied();
         }
 
-        var now = time.GetUtcNow();
         var hash = keys.Hmac("reauth-jti", claims.Jti);
         var consumed = await db.InTransactionAsync(userId, async tx =>
         {
-            if (!await IdentityStore.TryConsumeOneTimeAsync(tx, userId, hash, now, claims.ExpiresAt.AddMinutes(1)))
+            if (!await IdentityStore.TryConsumeReauthJtiAsync(tx, hash, requiredScope, sessionId, claims.ExpiresAt.AddMinutes(1)))
             {
                 return false;
             }
