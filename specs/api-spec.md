@@ -276,3 +276,7 @@ Resolvidos neste fechamento: PA-01, PA-04, PA-05, PA-07, PA-24, PA-25, PA-28 e, 
 - `npx @redocly/cli@1.34.5 lint contracts/openapi.yaml`: sem erros nem avisos (configuração recomendada).
 - `python3 -m openapi_spec_validator contracts/openapi.yaml`: OK.
 - Sugestão para a CI: as duas verificações acima, mais geração de clientes (Swift e Kotlin) como smoke test e testes de contrato (Schemathesis ou Dredd) contra o BFF.
+
+
+## Confirmações do produto (ADR-0010, itens 7–9)
+Prazos de privacidade (48 h / 15 dias), comportamento da anonimização (PA-30/PA-31) e **400 para validação (PA-13)** foram confirmados em 2026-10-08. Contrato v1.0.0 congelado, salvo validação jurídica dos prazos (DJ-07/DJ-09).

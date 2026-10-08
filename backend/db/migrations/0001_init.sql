@@ -1698,6 +1698,6 @@ INSERT INTO nina.consent_purpose (purpose_key, description, is_required, scope, 
   ('marketing_email',     'E-mails promocionais',                                       false, 'USER', '1.0.0', false),
   ('push_notifications',  'Registro de token e envio de push',                          false, 'USER', '1.0.0', true);
 
-INSERT INTO nina.schema_migration (version, description) VALUES ('0001', 'init: modelo fisico MVP (DB-001) + convencoes ADR-0009');
+INSERT INTO nina.schema_migration (version, description) VALUES ('0001', 'init: modelo fisico MVP (DB-001) + convencoes ADR-0009 e ADR-0010');
 
 COMMIT;
