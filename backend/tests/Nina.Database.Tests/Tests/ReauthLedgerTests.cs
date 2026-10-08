@@ -18,7 +18,8 @@ public sealed class ReauthLedgerTests(PgCluster cluster) : DbTestBase(cluster)
 
     private Task<string?> IssueFailsAsync(Guid asUser, byte[] hash, Guid session, string[] scopes, DateTimeOffset issued, DateTimeOffset expires, byte[]? mac)
         => FailsAsync(Role.App, asUser, "SELECT nina.reauth_issue(@h, @s, @scopes, @iat, @exp, @mac)",
-            Bytes("h", hash), P("s", session), Scopes(scopes), P("iat", issued.UtcDateTime), P("exp", expires.UtcDateTime), Bytes("mac", mac!));
+            Bytes("h", hash), P("s", session), Scopes(scopes), P("iat", issued.UtcDateTime), P("exp", expires.UtcDateTime),
+            new NpgsqlParameter("mac", NpgsqlDbType.Bytea) { Value = (object?)mac ?? DBNull.Value });
 
     private static byte[] ValidMac(Guid user, Guid session, byte[] hash, string[] scopes, DateTimeOffset issued, DateTimeOffset expires) =>
         ServerSigner.Sign("reauth.issue", ServerSigner.ReauthIssue(user, session, hash, scopes, issued, expires));
