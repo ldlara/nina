@@ -1,46 +1,76 @@
 # Ambiente local de desenvolvimento. Segredos vêm de .env (não versionado); veja .env.example.
+# A API conecta como nina_app (sujeito a RLS) — nunca como dono/superusuário (SR-018).
+# Para recriar o banco do zero (re-executa o bootstrap): docker compose down -v
+
+x-hardening: &hardening
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+
 services:
   postgres:
-    image: postgres:17
+    image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+    <<: *hardening
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]  # necessário para o entrypoint da imagem oficial
     environment:
       POSTGRES_DB: nina
-      POSTGRES_USER: ${POSTGRES_USER:-nina}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
-    ports: ["5432:5432"]
-    volumes: [pgdata:/var/lib/postgresql/data]
+      POSTGRES_USER: ${POSTGRES_USER:-nina_owner}   # dono/migrator; NÃO usado pela aplicação
+      POSTGRES_PASSWORD: ${POSTGRES_OWNER_PASSWORD:?defina POSTGRES_OWNER_PASSWORD no .env}
+      NINA_APP_PASSWORD: ${NINA_APP_PASSWORD:?defina NINA_APP_PASSWORD no .env}
+      NINA_WORKER_PASSWORD: ${NINA_WORKER_PASSWORD:?defina NINA_WORKER_PASSWORD no .env}
+      NINA_CONFIG_ADMIN_PASSWORD: ${NINA_CONFIG_ADMIN_PASSWORD:?defina NINA_CONFIG_ADMIN_PASSWORD no .env}
+    # Sem publicação de porta por padrão (API/BFF acessam pela rede interna do compose).
+    # Para acesso do host (psql/IDE): `docker compose --profile dbhost up -d` -> 127.0.0.1:${POSTGRES_HOST_PORT:-5432}.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/docker/initdb:/docker-entrypoint-initdb.d:ro
+      - ./backend/db/migrations:/migrations:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nina} -d nina"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nina_owner} -d nina"]
       interval: 5s
       timeout: 3s
       retries: 10
 
+  # Proxy TCP apenas-loopback para o banco (opcional): profile dbhost.
+  postgres-hostaccess:
+    image: alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e
+    profiles: [dbhost]
+    <<: *hardening
+    read_only: true
+    command: ["TCP-LISTEN:5432,fork,reuseaddr", "TCP:postgres:5432"]
+    ports: ["127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"]
+    depends_on: { postgres: { condition: service_healthy } }
+
   api:
     build: { context: ., dockerfile: infra/docker/Dockerfile.dev }
+    <<: *hardening
     working_dir: /src/backend/src/Nina.Api
     command: dotnet watch run --urls http://0.0.0.0:8080
     environment:
-      ConnectionStrings__Default: Host=postgres;Database=nina;Username=${POSTGRES_USER:-nina};Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__Default: Host=postgres;Database=nina;Username=nina_app;Password=${NINA_APP_PASSWORD:?defina NINA_APP_PASSWORD no .env}
       ASPNETCORE_ENVIRONMENT: Development
-    volumes: [".:/src"]
-    ports: ["5080:8080"]
+    # Só o código-fonte do backend (sem .env, .git, specs, mobile). Ajuste se o build precisar de mais.
+    volumes: ["./backend:/src/backend"]
+    ports: ["127.0.0.1:5080:8080"]
     depends_on: { postgres: { condition: service_healthy } }
 
   bff:
     build: { context: ., dockerfile: infra/docker/Dockerfile.dev }
+    <<: *hardening
     working_dir: /src/backend/src/Nina.Bff
     command: dotnet watch run --urls http://0.0.0.0:8080
     environment:
       Api__BaseUrl: http://api:8080
       ASPNETCORE_ENVIRONMENT: Development
-    volumes: [".:/src"]
-    ports: ["5081:8080"]
+    volumes: ["./backend:/src/backend"]
+    ports: ["127.0.0.1:5081:8080"]
     depends_on: [api]
 
   # Ferramentas one-shot: docker compose run --rm dotnet dotnet --info
   dotnet:
     build: { context: ., dockerfile: infra/docker/Dockerfile.dev }
+    <<: *hardening
     working_dir: /src/backend
-    volumes: [".:/src"]
+    volumes: ["./backend:/src/backend"]
     profiles: [tools]
 
 volumes:

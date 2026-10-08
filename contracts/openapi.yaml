@@ -1,18 +1,20 @@
 openapi: 3.1.0
 info:
   title: Nina BFF API
-  version: 1.0.0
+  version: 1.0.1
   summary: API do BFF consumida pelos apps iOS e Android do Nina (MVP).
   description: |
-    Contrato da API do BFF (ADR-0002) para os apps móveis. **Versão 1.0.0 (congelada para o MVP)**, conforme
+    Contrato da API do BFF (ADR-0002) para os apps móveis. **Versão 1.0.1 (congelada para o MVP; patch de
+    segurança SR-013..SR-016, SR-020, SR-021 da `specs/security-review-001.md`, sem quebra)**, conforme
     ADR-0009 e ADR-0010. Mudanças seguem as regras da seção "Congelamento v1" de `specs/api-spec.md`: aditivas
-    são permitidas; qualquer quebra exige `/v2`. Pontos ainda abertos estão listados na mesma seção.
+    são permitidas; qualquer quebra exige `/v2`. Pontos ainda abertos e itens que exigem decisão ou `/v2`
+    estão listados na mesma seção.
 
     ## Convenções
     - **Versionamento:** prefixo de caminho `/v1`. Mudanças aditivas (campos novos, enums novos
       tolerados) não mudam a versão; clientes ignoram campos desconhecidos. Quebras criam `/v2`.
       Descontinuação anunciada pelos cabeçalhos `Deprecation` e `Sunset`.
-    - **Autenticação:** `Authorization: Bearer <access_token>` (JWT/PASETO, até 15 min). Refresh
+    - **Autenticação:** `Authorization: Bearer <access_token>` (JWT com o perfil de segurança descrito abaixo, até 15 min). Refresh
       token opaco, rotativo e de uso único (SEC-011).
     - **Erros:** RFC 7807 (`application/problem+json`) com `code` estável e `errors[]` por campo.
       O cliente localiza a mensagem a partir de `code` (RF-050-A5); `title`/`detail` não são
@@ -58,6 +60,52 @@ info:
       exportação e eliminação/anonimização dos **próprios dados pessoais** em `/me/privacy-requests`, sem apagar os
       dados do bebê. Ambos exigem reautenticação (`X-Reauth-Token`).
     - **Mamada (ADR-0010):** `end_at` é obrigatório em `BREASTFEEDING` (PA-05 resolvido).
+
+    ## Segurança (v1.0.1, SR-013 a SR-021; somente esclarecimentos e restrições compatíveis)
+    - **Limite de taxa (SEC-040):** **todas** as operações podem responder `429` com o cabeçalho `Retry-After`
+      (segundos) e o `Problem` `RATE_LIMITED` (taxa por IP, conta e dispositivo) ou `QUOTA_EXCEEDED` (cota de volume,
+      por exemplo `limits.sync_max_events_per_baby_per_day`). O cliente respeita `Retry-After` com atraso
+      exponencial e *jitter*; nunca reenvia em laço apertado. Login, cadastro, verificação, recuperação,
+      reautenticação, convites, exportação e sync têm limites mais baixos; valores são configuração do servidor e
+      podem ser consultados em `GET /reference-data` -> `limits` quando publicados.
+    - **Tamanhos e formatos de entrada (SEC-043):** toda string livre ou credencial de **requisição** tem
+      `maxLength` (senha 128; códigos 6 a 12 dígitos; tokens opacos até 512; `id_token` até 4096; `nonce` 256;
+      e-mail 254; `timezone` e `tz` 64; `locale` 35). Objetos de credencial rejeitam campos desconhecidos
+      (`additionalProperties: false`). Violação: `400 VALIDATION_FAILED` com `errors[]`.
+    - **Perfil do JWT de acesso (SEC-011, SR-013.4):** o cliente trata o access token como **opaco**. O servidor
+      emite e valida assim: assinatura assimétrica com algoritmo **fixado na configuração** (`EdDSA` com Ed25519, ou
+      `ES256`; `none`, `HS*` e `RS256` são recusados e o `alg` do cabeçalho do token nunca é confiado), cabeçalho
+      `typ=at+jwt` e `kid` obrigatório; claims `iss` (`https://api.nina.app`), `aud` (`nina-api`), `sub` (id do
+      usuário), `sid` (id da sessão), `jti`, `iat`, `nbf` e `exp` (`exp - iat <= 900 s`); tolerância de relógio de no
+      máximo 60 s. A cada requisição o servidor confere que a sessão (`sid`) não foi revogada e que o vínculo com o bebê
+      está ativo; **papel e permissões nunca vêm do token**. Rotação de chaves: a nova chave (`kid`) é publicada para os
+      verificadores internos antes de assinar, e a chave anterior continua válida para verificação por pelo menos
+      `exp` máximo + tolerância; chave comprometida é retirada imediatamente (os tokens afetados expiram em até
+      15 min ou caem por revogação de sessão). Os tokens de reautenticação seguem o mesmo perfil, com `typ=reauth+jwt`
+      e `aud=nina-reauth`.
+    - **Reautenticação (SR-013.1):** ver `POST /auth/reauthenticate` e o cabeçalho `X-Reauth-Token`. O token é
+      vinculado a `sub` e `sid`, a um `scope` por operação sensível, tem `jti` de **uso único** e validade de no
+      máximo 300 s.
+    - **Recuperação de senha (SEC-017):** `POST /auth/password/reset` invalida **todas** as sessões e **todos** os
+      refresh tokens do usuário (todas as famílias) e quaisquer tokens de reautenticação em circulação.
+    - **Códigos de verificação (SEC-014):** códigos de e-mail (`/auth/email/verify`, `/me/email-changes/confirm`)
+      são numéricos de 6 a 12 dígitos (alvo de emissão: 8 dígitos), de uso único, com validade máxima de 15 minutos
+      (alvo 10), no máximo 5 tentativas por código (depois disso o código é invalidado) e limite de taxa por
+      conta e por IP.
+    - **Sync, ordem e conflito (SR-014):** a **ordem é definida pelo servidor** (`server_received_at` e a sequência
+      interna `sync_sequence`); `client_created_at` é **somente informativo** e nunca decide quem vence um conflito.
+      Detalhes e cotas em `POST /sync/push`.
+    - **Dados mínimos (SR-015):** o campo `Baby.sex` é opcional, **depreciado** e o app **não deve coletá-lo nem
+      enviá-lo** (privacy-security-spec 1.3: "Não coletar"). `Session.approx_location` é reservado e o servidor não o
+      preenche no MVP (sem geolocalização por IP).
+    - **Exclusão em cascata (SR-016):** antes e depois de excluir um bebê compartilhado (por exclusão de conta do
+      Owner ou por `DELETE /babies/{id}`), o servidor notifica por e-mail e push (categoria `SYSTEM`, não
+      desativável) o titular e todos os cuidadores ativos. Ver `AccountDeletion.caregivers_notification`.
+    - **Superfície operacional (SR-020):** `/health` e `/ready` **não fazem parte** deste contrato nem são expostos
+      pela rota pública; são internos à plataforma e não listam módulos nem dependências.
+    - **Alinhamento com o banco (SR-021):** `PurposeKey` trafega em MAIÚSCULAS no contrato (`TERMS_OF_USE`); o servidor
+      converte para a chave minúscula do banco (`terms_of_use`) na fronteira, de forma bijetora, e valida contra o
+      catálogo. O banco é a fonte dos limites efetivos; este contrato nunca é mais frouxo que o banco.
   contact:
     name: Time Nina (API)
   license:
@@ -144,7 +192,12 @@ paths:
       tags: [Auth]
       operationId: verifyEmail
       summary: Confirmar e-mail e abrir a primeira sessão
-      description: Ativa a conta (ADR-0009) e emite a primeira sessão. Antes disso não existe sessão nem conta ativa.
+      description: |
+        Ativa a conta (ADR-0009) e emite a primeira sessão. Antes disso não existe sessão nem conta ativa.
+        Política do código (SR-013.5): numérico de 6 a 12 dígitos (emissão alvo de 8), uso único, validade máxima de
+        15 minutos (alvo 10), no máximo 5 tentativas por código (esgotadas, o código é invalidado e é preciso pedir
+        outro) e limite de taxa por e-mail e por IP. Código errado, expirado ou esgotado: `401`
+        (`INVALID_VERIFICATION_CODE`), sempre com a mesma resposta.
       security: []
       x-rf: [RF-001]
       requestBody:
@@ -166,7 +219,11 @@ paths:
       tags: [Auth]
       operationId: loginWithPassword
       summary: Login com e-mail e senha
-      description: Credenciais inválidas retornam erro genérico (`INVALID_CREDENTIALS`). Após N falhas aplica-se limite de taxa (D-16).
+      description: |
+        Credenciais inválidas retornam erro genérico (`INVALID_CREDENTIALS`), sem revelar se a conta existe (resposta e
+        tempo equivalentes). Após N falhas por conta, IP ou dispositivo (D-16) aplica-se limite de taxa progressivo:
+        `429 RATE_LIMITED` com `Retry-After` crescente (SEC-041). Login em dispositivo novo gera aviso de segurança por
+        e-mail ao titular. `password` aceita até 128 caracteres (SR-013).
       security: []
       x-rf: [RF-001]
       requestBody:
@@ -307,7 +364,13 @@ paths:
       tags: [Auth]
       operationId: resetPassword
       summary: Definir nova senha com token de recuperação
-      description: Consome o token, troca a senha e encerra todas as outras sessões (RF-002-A2). Token expirado ou usado é recusado (RF-002-A3).
+      description: |
+        Consome o token, troca a senha e encerra **todas** as sessões do usuário e **todos** os refresh tokens
+        (todas as famílias), além de invalidar tokens de reautenticação em circulação e outros tokens de recuperação
+        pendentes (SEC-017, SR-013.6). No reset não há sessão corrente a preservar: o cliente deve fazer login novo
+        com a senha nova (a resposta `204` não emite sessão). Aviso de segurança por e-mail. Token expirado ou usado é
+        recusado (RF-002-A3; `401 INVALID_RESET_TOKEN`). O token de recuperação é de uso único, aleatório (128 bits ou
+        mais) e vale no máximo 30 minutos.
       security: []
       x-rf: [RF-002]
       requestBody:
@@ -331,8 +394,19 @@ paths:
       operationId: reauthenticate
       summary: Reautenticar para operação sensível
       description: |
-        Devolve `reauth_token` de curta duração (padrão 5 min), enviado no cabeçalho `X-Reauth-Token`
-        em exportação, exclusão de conta/bebê, troca de e-mail/senha e transferência de propriedade.
+        Devolve `reauth_token` de curta duração (máximo 300 s), enviado no cabeçalho `X-Reauth-Token`
+        em exportação, exclusão de conta/bebê, troca de e-mail/senha, vínculo de identidade e transferência de
+        propriedade.
+
+        **Escopo e uso único (SR-013.1):** o cliente informa em `scope` a(s) operação(ões) sensível(is) a que o token
+        se destina (ver `ReauthScope`; cada operação sensível lista o seu em `x-reauth-scope`). O token é vinculado ao
+        usuário (`sub`) e à sessão (`sid`), carrega o `scope` e um `jti` de **uso único**: depois de aceito por uma
+        operação, o mesmo token é recusado (`401 REAUTH_REQUIRED`), e o cliente obtém outro por operação. Token com
+        escopo diferente da operação, de outra sessão, expirado ou já usado: `401 REAUTH_REQUIRED`. Sem `scope`
+        (comportamento de transição da v1), o servidor emite um token de uso único que vale para **uma** operação
+        sensível qualquer do usuário nesta sessão; o cliente deve passar a enviar `scope` (será obrigatório na `/v2`).
+        Credenciais: `password` ou (`provider`, `id_token`, `nonce`), exatamente um dos dois. Falhas repetidas
+        sofrem limite de taxa por usuário e por IP (`429`).
       x-rf: [RF-044, RF-045]
       x-roles: [Any]
       requestBody:
@@ -388,8 +462,9 @@ paths:
     put:
       tags: [Account]
       operationId: changePassword
+      x-reauth-scope: [ACCOUNT_PASSWORD_CHANGE]
       summary: Alterar senha
-      description: Exige `X-Reauth-Token`. Revoga as outras sessões e dispara aviso de segurança (RF-002-A5).
+      description: Exige `X-Reauth-Token` com escopo `ACCOUNT_PASSWORD_CHANGE`. Revoga as outras sessões (e seus refresh tokens) e dispara aviso de segurança (RF-002-A5). `new_password` tem no máximo 128 caracteres.
       x-rf: [RF-002]
       x-roles: [Any]
       parameters:
@@ -412,8 +487,9 @@ paths:
     post:
       tags: [Account]
       operationId: requestEmailChange
+      x-reauth-scope: [ACCOUNT_EMAIL_CHANGE]
       summary: Solicitar troca de e-mail
-      description: Exige `X-Reauth-Token`. Envia código ao novo e-mail; confirmação em `/me/email-changes/confirm`. Aviso de segurança ao e-mail antigo (RF-002-A5).
+      description: Exige `X-Reauth-Token` com escopo `ACCOUNT_EMAIL_CHANGE`. Envia código ao novo e-mail; confirmação em `/me/email-changes/confirm`. Aviso de segurança ao e-mail antigo (RF-002-A5).
       x-rf: [RF-002, RF-055]
       x-roles: [Any]
       parameters:
@@ -437,6 +513,10 @@ paths:
       tags: [Account]
       operationId: confirmEmailChange
       summary: Confirmar troca de e-mail
+      description: |
+        Mesma política de código de `/auth/email/verify`: numérico de 6 a 12 dígitos, uso único, validade máxima de
+        15 minutos, no máximo 5 tentativas por código e limite de taxa (`429`). Código inválido, expirado ou esgotado:
+        `401 INVALID_VERIFICATION_CODE`. Revoga as outras sessões.
       x-rf: [RF-002]
       x-roles: [Any]
       requestBody:
@@ -460,8 +540,9 @@ paths:
     post:
       tags: [Account]
       operationId: linkIdentity
+      x-reauth-scope: [IDENTITY_LINK]
       summary: Vincular identidade Google ou Apple à conta logada
-      description: Única forma de unir métodos de login sobre o mesmo e-mail (ADR-0007). Exige `X-Reauth-Token`.
+      description: Única forma de unir métodos de login sobre o mesmo e-mail (ADR-0007). Exige `X-Reauth-Token` com escopo `IDENTITY_LINK`.
       x-rf: [RF-001]
       x-roles: [Any]
       parameters:
@@ -490,8 +571,9 @@ paths:
     delete:
       tags: [Account]
       operationId: unlinkIdentity
+      x-reauth-scope: [IDENTITY_UNLINK]
       summary: Desvincular identidade
-      description: Recusa (`409 LAST_LOGIN_METHOD`) se for o único método de login.
+      description: Exige `X-Reauth-Token` com escopo `IDENTITY_UNLINK`. Recusa (`409 LAST_LOGIN_METHOD`) se for o único método de login.
       x-rf: [RF-001]
       x-roles: [Any]
       parameters:
@@ -730,11 +812,18 @@ paths:
     delete:
       tags: [Babies]
       operationId: deleteBaby
+      x-reauth-scope: [BABY_DELETE]
       summary: Excluir bebê para todos os cuidadores
       description: |
-        Apenas Owner, com `X-Reauth-Token`. Apaga eventos, previsões e preferências, gera tombstone de
-        sync e invalida caches (RB-008/015). Se houver outros cuidadores ativos exige
+        Apenas Owner, com `X-Reauth-Token` de escopo `BABY_DELETE`. Apaga eventos, previsões e preferências, gera
+        tombstone de sync e invalida caches (RB-008/015). Se houver outros cuidadores ativos exige
         `acknowledge_other_caregivers=true` (aviso explícito, ADR-0008).
+
+        **Notificação (SR-016):** com outros cuidadores ativos, o servidor notifica o Owner e **todos os cuidadores
+        ativos** (e-mail e push, categoria `SYSTEM`, não desativável) ao receber o pedido e ao concluir a exclusão, e
+        registra o `jti` do token de reautenticação na auditoria. O servidor não permite que a exclusão seja confirmada
+        sem a prova de reautenticação. Esta operação continua **imediata** na v1; a janela de arrependimento para
+        bebê compartilhado exige decisão ou `/v2` (`specs/api-spec.md`, seção 8.4).
       x-rf: [RF-045, RF-055]
       x-roles: [Owner]
       parameters:
@@ -888,8 +977,9 @@ paths:
     post:
       tags: [Caregivers]
       operationId: transferOwnership
+      x-reauth-scope: [OWNERSHIP_TRANSFER]
       summary: Transferir a propriedade do bebê
-      description: Exige `X-Reauth-Token` e destino com vínculo `ACTIVE`. O Owner anterior vira Caregiver. Gera AuditEvent.
+      description: Exige `X-Reauth-Token` com escopo `OWNERSHIP_TRANSFER` e destino com vínculo `ACTIVE`. O Owner anterior vira Caregiver. Gera AuditEvent e notifica o novo e o antigo Owner.
       x-rf: [RF-006, RF-045, RF-055]
       x-roles: [Owner]
       parameters:
@@ -1115,7 +1205,33 @@ paths:
         Regras: `base_version` é a versão do servidor que o cliente conhecia (0 em criação). Edições
         concorrentes são resolvidas por last-write-wins por campo e auditadas (`resolution`, `conflicts`).
         Update sobre tombstone **não ressuscita** (`REJECTED`, `ENTITY_DELETED`). `device_id` deve ser o da
-        sessão. `client_created_at` é preservado mesmo com relógio errado; anomalia grande vem em `warnings`.
+        sessão.
+
+        **Ordem definida pelo servidor (SR-014):** o "último" a escrever é decidido pela ordem de chegada ao servidor
+        (`server_received_at` e a sequência interna `sync_sequence`, atribuída no commit), **nunca** pelo relógio do
+        cliente. `client_created_at` é **somente informativo** (auditoria, exibição e diagnóstico de relógio); é
+        preservado como veio e não influencia a resolução. Por isso `LWW_CLIENT_WON` significa "a mutação recebida
+        agora venceu" e `LWW_SERVER_WON` "o valor já aplicado permaneceu" (em ordem de chegada). Se
+        `|client_created_at - server_received_at|` excede `limits.sync_max_clock_skew_seconds` (padrão 86400),
+        a mutação é aplicada normalmente e a resposta traz `warnings[CLIENT_CLOCK_SKEW]` com `skew_seconds`; o
+        cliente deve avisar o usuário para corrigir o relógio. Cada resultado devolve `server_received_at`.
+
+        **Validação cruzada de `baby_id` e `entity_id` (SR-014):** em toda mutação o servidor verifica o vínculo ativo
+        do usuário com `baby_id` **e** que `entity_id` pertence a esse `baby_id` (e, em `WAKE_EVENT`, que
+        `sleep_session_id` é do mesmo bebê). `UPDATE`/`DELETE` com `entity_id` inexistente **ou de outro bebê**
+        resulta em `REJECTED` com `problem.code=ENTITY_NOT_FOUND`, `retryable=false`, sem distinguir os dois casos
+        (não revela existência). `CREATE` com `entity_id` já usado por outro bebê ou outro usuário resulta em
+        `REJECTED` com `problem.code=ENTITY_ID_UNAVAILABLE`, `retryable=false` (o cliente gera novo UUID); o
+        `mutation_id` é escopado por usuário e dispositivo, de modo que um UUID de outro usuário nunca causa colisão
+        nem queima o identificador alheio. O cursor de `/sync/pull` é assinado e vinculado a um único `baby_id`.
+
+        **Cotas e limites de lote (SEC-042):** no máximo `limits.sync_max_mutations_per_push` (100) mutações e
+        `limits.sync_max_payload_bytes` (262144 = 256 KiB) por requisição (`413 PAYLOAD_TOO_LARGE`); cota diária por
+        bebê `limits.sync_max_events_per_baby_per_day` e teto de entidades vivas por bebê
+        `limits.sync_max_entities_per_baby`. Excedida a cota diária, a requisição inteira recebe
+        `429 QUOTA_EXCEEDED` com `Retry-After`; excedido o teto de entidades, a mutação `CREATE` sai `REJECTED` com
+        `problem.code=ENTITY_QUOTA_EXCEEDED` e `retryable=false`. Os valores ausentes de `/reference-data` indicam
+        que o servidor não os publica (aplica o padrão interno).
 
         **Sono sobreposto (ADR-0009, decisão 5):** governado pela flag `sleep_overlap_policy`
         (`GET /reference-data` -> `policies`). Padrão `ACCEPT_AND_WARN`: a mutação é `APPLIED` com
@@ -1769,12 +1885,19 @@ paths:
       description: |
         Assíncrono (RF-044-A1): `202` e aviso (push e e-mail) quando pronto. Escopo: conta, consentimentos, bebês de que
         é Owner (ou os escolhidos em `baby_ids`), eventos, preferências, vínculos; inclui timestamps UTC, fuso e
-        `schema_version` (RB-014). Disponível a qualquer plano. Exige `X-Reauth-Token` apenas no download.
-        Escopo de dados de outros cuidadores: D-33.
+        `schema_version` (RB-014). Disponível a qualquer plano. Escopo de dados de outros cuidadores: D-33.
+
+        **Reautenticação (SR-013.1):** o contrato v1 exige `X-Reauth-Token` (escopo `DATA_EXPORT_DOWNLOAD`) no
+        download. Na solicitação o cabeçalho é **opcional** (compatibilidade); quando enviado, o servidor o valida
+        (escopo `DATA_EXPORT_REQUEST`, uso único) e o registra na auditoria. Exigi-lo sempre, como pede a
+        privacy-security-spec 5.1, é mudança que requer decisão ou `/v2` (`specs/api-spec.md`, seção 8.4). Limite de
+        pedidos por dia por usuário (`429`).
       x-rf: [RF-044, RF-055]
       x-roles: [Any]
+      x-reauth-scope: [DATA_EXPORT_REQUEST]
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/ReauthTokenOptional'
       requestBody:
         required: true
         content:
@@ -1818,8 +1941,9 @@ paths:
     post:
       tags: [Privacy]
       operationId: createExportDownloadLink
+      x-reauth-scope: [DATA_EXPORT_DOWNLOAD]
       summary: Gerar link assinado de download
-      description: 'Exige `X-Reauth-Token`. URL de curta duração e uso único, acessível só ao titular (RF-044-A4). Pedido ainda em processamento: `409`.'
+      description: 'Exige `X-Reauth-Token` com escopo `DATA_EXPORT_DOWNLOAD`. URL de curta duração (no máximo 5 minutos) e uso único, acessível só ao titular (RF-044-A4). Pedido ainda em processamento: `409`. Limite de geração de links por exportação e por dia (`429`).'
       x-rf: [RF-044, RF-055]
       x-roles: [Any]
       parameters:
@@ -1857,6 +1981,7 @@ paths:
     post:
       tags: [Privacy]
       operationId: requestAccountDeletion
+      x-reauth-scope: [ACCOUNT_DELETE]
       summary: Solicitar exclusão da conta e dos dados
       description: |
         **Somente o Owner ativo de um bebê** pode excluir a conta (ADR-0009, decisão 6; ADR-0010, decisão 3).
@@ -1878,6 +2003,12 @@ paths:
         - `TRANSFER_OWNERSHIP`: `baby_decisions` com `action=TRANSFER_OWNERSHIP` e `new_owner_membership_id` para
           cada bebê compartilhado.
         Validação jurídica pendente (DJ-09). Não cancela assinatura da loja.
+
+        **Notificação aos demais cuidadores (SR-016):** ao criar o pedido e ao concluí-lo, o servidor notifica por
+        e-mail e push (categoria `SYSTEM`, não desativável) o próprio titular e **todos os cuidadores ativos** dos
+        bebês que serão apagados, informando o fim da janela (`scheduled_for`). O resultado aparece em
+        `AccountDeletion.caregivers_notification`. O servidor registra o `jti` do `X-Reauth-Token` (escopo
+        `ACCOUNT_DELETE`, uso único) no pedido como prova de reautenticação.
       x-rf: [RF-045, RF-055]
       x-roles: [Owner]
       parameters:
@@ -1968,6 +2099,7 @@ paths:
     post:
       tags: [Privacy]
       operationId: createPrivacyRequest
+      x-reauth-scope: [PRIVACY_REQUEST]
       summary: Requisitar direito do titular sobre os próprios dados pessoais
       description: |
         Caminho **separado** da exclusão de conta (ADR-0010, decisão 3) para cumprir a LGPD (art. 18) quando o titular
@@ -1990,7 +2122,7 @@ paths:
           (`policies.deletion_grace_days`): `scheduled_for`, cancelável em `DELETE /me/privacy-requests/{request_id}`.
           Para um **Owner ativo**, responde `409 ACCOUNT_DELETION_REQUIRED` (usar `/me/deletion-request`).
 
-        Exige `X-Reauth-Token` (verificação de identidade, privacy-security-spec 5). Status e prazo: `status`,
+        Exige `X-Reauth-Token` com escopo `PRIVACY_REQUEST` (verificação de identidade, privacy-security-spec 5). Status e prazo: `status`,
         `acknowledged_at` e `due_at` (`requested_at` + `policies.privacy_request_sla_days`, padrão 15 dias; confirmação
         em até `policies.privacy_request_ack_hours`, padrão 48 h). Prazos propostos, **a validar pelo jurídico
         (DJ-07/DJ-09)**. Uma requisição aberta do mesmo tipo responde `409 PRIVACY_REQUEST_OPEN`.

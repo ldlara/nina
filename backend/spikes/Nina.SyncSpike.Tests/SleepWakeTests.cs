@@ -93,16 +93,18 @@ public sealed class SleepWakeTests(SpikeFixture fx)
         var r = (await second.SyncAsync()).Results.Single();
         Assert.Equal(("APPLIED", "KEPT_BOTH"), (r.Status, r.Resolution));
         Assert.Contains(r.Warnings!, w => w.Code == "OPEN_SLEEP_EXISTS");
-        await t.SyncBothTwiceAsync();
-        Assert.Equal(1, await Env.ScalarAsync<long>("SELECT count(*) FROM nina.sleep_session WHERE baby_id=@b AND end_at IS NULL", ("b", t.Baby.BabyId)));
-        Assert.True(await Env.ScalarAsync<bool>("SELECT end_at IS NOT NULL FROM nina.sleep_session WHERE id=@i", ("i", sa)));   // a mais antiga fecha no início da mais nova
-        Assert.True(await Env.ScalarAsync<bool>("SELECT end_at IS NULL FROM nina.sleep_session WHERE id=@i", ("i", sb)));
-        await t.AssertConvergedAsync(t.A, t.B);
-        // o usuário que parar o timer da sessão auto-fechada vence a heurística do servidor
+        // o usuário que parar o timer da sessão auto-fechada vence a heurística do servidor (relógio de servidor mínimo)
         t.A.Now = () => DateTimeOffset.UtcNow.AddMinutes(-1);
         t.A.Update("SLEEP_SESSION", sa, FakeDevice.D(("end_at", T(3))));
         var u = (await t.A.SyncAsync()).Results.Single();
-        Assert.Equal("LWW_CLIENT_WON", u.Resolution);
+        // A criou primeiro e não viu o fechamento automático (base_version velho): conflito decidido a favor do usuário;
+        // A criou depois: a resposta KEPT_BOTH já trouxe o estado canônico e a edição é sucessora causal (sem conflito).
+        Assert.Equal(bArrivesFirst ? "NONE" : "LWW_CLIENT_WON", u.Resolution);
+        await t.SyncBothTwiceAsync();
+        Assert.Equal(1, await Env.ScalarAsync<long>("SELECT count(*) FROM nina.sleep_session WHERE baby_id=@b AND end_at IS NULL", ("b", t.Baby.BabyId)));
+        Assert.True(await Env.ScalarAsync<bool>("SELECT end_at IS NOT NULL FROM nina.sleep_session WHERE id=@i", ("i", sa)));
+        Assert.True(await Env.ScalarAsync<bool>("SELECT end_at IS NULL FROM nina.sleep_session WHERE id=@i", ("i", sb)));
+        await t.AssertConvergedAsync(t.A, t.B);
     }
 
     [Fact]
@@ -112,7 +114,7 @@ public sealed class SleepWakeTests(SpikeFixture fx)
         var ms = Enumerable.Range(0, 6).Select(i => (i, id: Guid.NewGuid(), dev: i % 2 == 0 ? t.A : t.B)).ToList();
         var res = await Task.WhenAll(ms.Select(x => Task.Run(() => Env.Service.PushAsync(x.dev.Auth,
             new PushRequest(x.dev.DeviceId, [new Mutation(Guid.NewGuid(), "CREATE", "SLEEP_SESSION", x.id, t.Baby.BabyId, 0, Data.T0, Data.Sleep(T(x.i * 7), null))])))));
-        Assert.All(res, r => Assert.Equal("APPLIED", r.Results.Single().Status));
+        Assert.All(res, r => Assert.True(r.Results.Single().Status == "APPLIED", System.Text.Json.JsonSerializer.Serialize(r.Results.Single(), Json.Options)));
         Assert.Equal(1, await Env.ScalarAsync<long>("SELECT count(*) FROM nina.sleep_session WHERE baby_id=@b AND end_at IS NULL", ("b", t.Baby.BabyId)));
         var open = await Env.ScalarAsync<Guid>("SELECT id FROM nina.sleep_session WHERE baby_id=@b AND end_at IS NULL", ("b", t.Baby.BabyId));
         Assert.Equal(ms.Last().id, open);                                                 // fica aberta a de início mais recente

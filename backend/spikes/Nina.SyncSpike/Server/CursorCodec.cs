@@ -69,6 +69,7 @@ public sealed class CursorCodec(byte[] secret)
             if (parts.Length != 2) return null;
             var body = UnB64(parts[0]);
             var mac = UnB64(parts[1]);
+            if (B64(body) != parts[0] || B64(mac) != parts[1]) return null;       // base64 canônico (sem bits de preenchimento adulteráveis)
             if (!CryptographicOperations.FixedTimeEquals(mac, Mac(body))) return null;
             using var doc = JsonDocument.Parse(body);
             var root = doc.RootElement;

@@ -8,6 +8,7 @@ import app.nina.data.local.NinaDatabase
 import app.nina.data.remote.ApiTokenRefresher
 import app.nina.data.remote.HeadersInterceptor
 import app.nina.data.remote.NetworkFactory
+import app.nina.data.remote.NinaApi
 import app.nina.data.remote.TokenAuthenticator
 import app.nina.data.remote.dto.DeviceInfoDto
 import app.nina.data.repository.DefaultAuthRepository
@@ -53,12 +54,12 @@ class AppContainer(context: Context) {
         timezoneId = { ZoneId.systemDefault().id },
     )
 
-    private val baseUrl = BuildConfig.API_BASE_URL.let { if (it.endsWith("/")) it else "$it/" }
-    private val headers = HeadersInterceptor(sessionManager)
+    private val baseUrl: String = BuildConfig.API_BASE_URL.let { if (it.endsWith("/")) it else "$it/" }
+    private val headers: HeadersInterceptor = HeadersInterceptor(sessionManager)
 
     // Cliente sem Authenticator, usado apenas para rotacionar o refresh token (evita recursão).
-    private val refreshApi = NetworkFactory.api(baseUrl, NetworkFactory.okHttp(headers))
-    private val api = NetworkFactory.api(
+    private val refreshApi: NinaApi = NetworkFactory.api(baseUrl, NetworkFactory.okHttp(headers))
+    private val api: NinaApi = NetworkFactory.api(
         baseUrl,
         NetworkFactory.okHttp(
             headers,

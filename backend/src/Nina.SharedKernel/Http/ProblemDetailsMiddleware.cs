@@ -37,9 +37,10 @@ public sealed partial class ProblemDetailsMiddleware(RequestDelegate next, ILogg
         {
             await ProblemWriter.WriteAsync(context, ProblemException.Validation(new FieldError("body", "INVALID_BODY")));
         }
-        catch (PostgresException ex) when (!context.Response.HasStarted && ex.SqlState is PostgresErrorCodes.CheckViolation)
+        catch (PostgresException ex) when (!context.Response.HasStarted
+                                           && ex.SqlState is PostgresErrorCodes.CheckViolation or PostgresErrorCodes.InvalidParameterValue)
         {
-            // CHECK do schema (ex.: fuso IANA, formato de locale) que a validação da aplicação não cobriu.
+            // CHECK/domínio do schema (ex.: fuso IANA desconhecido, formato de locale) que a validação da aplicação não cobriu.
             await ProblemWriter.WriteAsync(context, ProblemException.Validation(new FieldError(ex.ConstraintName ?? "body", "INVALID_VALUE")));
         }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)

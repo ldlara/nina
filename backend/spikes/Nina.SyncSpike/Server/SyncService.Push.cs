@@ -219,7 +219,7 @@ public sealed partial class SyncService(NpgsqlDataSource appDataSource, CursorCo
             {
                 rj = r;
             }
-            catch (PostgresException pg) when (pg.SqlState == "23505" && pg.ConstraintName == "sleep_one_open_uq" && attempt == 0)
+            catch (PostgresException pg) when (pg.SqlState == "23505" && pg.ConstraintName == "sleep_one_open_uq" && attempt < 2)
             {
                 // outro dispositivo abriu um sono ao mesmo tempo: refazer vendo a sessão aberta já confirmada
                 await ExecAsync(env, "ROLLBACK TO SAVEPOINT m", ct);
@@ -338,19 +338,19 @@ public sealed partial class SyncService(NpgsqlDataSource appDataSource, CursorCo
     }
 
     private static async Task UpsertClocksAsync(Env env, Mutation m, Guid entityId, IEnumerable<string> fields, DateTimeOffset ts,
-        long version, Guid device, Guid? mutationId, CancellationToken ct)
+        long version, Guid device, Guid? mutationId, CancellationToken ct, bool overwriteTs = false)
     {
         var arr = fields.ToArray();
         if (arr.Length == 0) return;
         await using var c = Cmd(env,
             "INSERT INTO nina_spike.field_clock (entity_id, field, baby_id, ts, version, user_id, device_id, mutation_id) " +
             "SELECT @e, f, @b, @ts, @v, @u, @d, @m FROM unnest(@f) AS f " +
-            "ON CONFLICT (entity_id, field) DO UPDATE SET ts = GREATEST(nina_spike.field_clock.ts, EXCLUDED.ts), " +
+            "ON CONFLICT (entity_id, field) DO UPDATE SET ts = CASE WHEN @ow THEN EXCLUDED.ts ELSE GREATEST(nina_spike.field_clock.ts, EXCLUDED.ts) END, " +
             "version = EXCLUDED.version, user_id = EXCLUDED.user_id, device_id = EXCLUDED.device_id, mutation_id = EXCLUDED.mutation_id");
         P(c, "e", entityId, NpgsqlDbType.Uuid); P(c, "b", m.BabyId, NpgsqlDbType.Uuid);
         P(c, "ts", ts.UtcDateTime, NpgsqlDbType.TimestampTz); P(c, "v", version, NpgsqlDbType.Bigint);
         P(c, "u", device == ServerDevice ? null : env.Ctx.UserId, NpgsqlDbType.Uuid); P(c, "d", device, NpgsqlDbType.Uuid);
-        P(c, "m", mutationId, NpgsqlDbType.Uuid); P(c, "f", arr, NpgsqlDbType.Array | NpgsqlDbType.Text);
+        P(c, "m", mutationId, NpgsqlDbType.Uuid); P(c, "f", arr, NpgsqlDbType.Array | NpgsqlDbType.Text); P(c, "ow", overwriteTs, NpgsqlDbType.Boolean);
         await c.ExecuteNonQueryAsync(ct);
     }
 
@@ -467,6 +467,12 @@ public sealed partial class SyncService(NpgsqlDataSource appDataSource, CursorCo
     /// </summary>
     private async Task<Guid?> HandleOpenSleepAsync(Env env, Mutation m, List<Field> fields, List<PushWarning> warnings, CancellationToken ct)
     {
+        // sem linha para travar quando não há sessão aberta: serializa por bebê com lock consultivo (senão 23505 em corrida)
+        await using (var lk = Cmd(env, "SELECT pg_advisory_xact_lock(hashtextextended(@k, 0))"))
+        {
+            P(lk, "k", "open-sleep:" + env.BabyId, NpgsqlDbType.Text);
+            await lk.ExecuteNonQueryAsync(ct);
+        }
         Guid existing; DateTime existingStart;
         await using (var q = Cmd(env, "SELECT id, start_at FROM nina.sleep_session WHERE baby_id = @b AND end_at IS NULL AND deleted_at IS NULL FOR UPDATE"))
         {
@@ -482,7 +488,7 @@ public sealed partial class SyncService(NpgsqlDataSource appDataSource, CursorCo
             await using var u = Cmd(env, "UPDATE nina.sleep_session SET end_at = @e, last_modified_by = @u WHERE id = @id RETURNING version");
             P(u, "e", myStart, NpgsqlDbType.TimestampTz); P(u, "u", env.Ctx.UserId, NpgsqlDbType.Uuid); P(u, "id", existing, NpgsqlDbType.Uuid);
             var v = (long)(await u.ExecuteScalarAsync(ct))!;
-            await UpsertClocksAsync(env, m, existing, ["end_at"], DateTimeOffset.UnixEpoch, v, ServerDevice, null, ct);
+            await UpsertClocksAsync(env, m, existing, ["end_at"], DateTimeOffset.UnixEpoch, v, ServerDevice, null, ct, overwriteTs: true);
         }
         else
         {

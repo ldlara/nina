@@ -1,6 +1,7 @@
 import SwiftUI
 import NinaCore
 
+@MainActor
 struct BabyFormScreen: View {
     @State private var viewModel: BabyFormViewModel
 

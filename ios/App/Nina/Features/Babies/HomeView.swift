@@ -1,6 +1,7 @@
 import SwiftUI
 import NinaCore
 
+@MainActor
 struct HomeView: View {
     let container: AppContainer
     @Bindable var babies: BabiesViewModel

@@ -17,8 +17,8 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: bff
-          image: REGISTRY/nina-bff:TAG  # placeholder: definir registry (ADR-0006)
-          imagePullPolicy: IfNotPresent
+          image: REGISTRY/nina-bff@sha256:DIGEST  # placeholder: registry (ADR-0006); implantar por digest (SR-017)
+          imagePullPolicy: Always
           ports:
             - { name: http, containerPort: 8080 }
           envFrom:
@@ -63,6 +63,17 @@ kind: Route
 metadata:
   name: nina-bff
   labels: { app: nina-bff, app.kubernetes.io/part-of: nina }
+  annotations:
+    # HSTS (aplicado pelo router em rotas edge/reencrypt)
+    haproxy.router.openshift.io/hsts_header: max-age=31536000;includeSubDomains
+    # Rate limit por IP de origem (valores iniciais; ajustar após teste de carga)
+    haproxy.router.openshift.io/rate-limit-connections: "true"
+    haproxy.router.openshift.io/rate-limit-connections.concurrent-tcp: "50"
+    haproxy.router.openshift.io/rate-limit-connections.rate-tcp: "100"
+    haproxy.router.openshift.io/rate-limit-connections.rate-http: "200"
+    haproxy.router.openshift.io/timeout: 30s
+    # Somente HTTP/HTTPS pelo router; sem balanceamento "sticky" por cookie desnecessário
+    haproxy.router.openshift.io/disable_cookies: "true"
 spec:
   # host: definir por ambiente (dominio pendente)
   to: { kind: Service, name: nina-bff }

@@ -5,3 +5,5 @@ DerivedData/
 .build/
 .swiftpm/
 *.xcuserstate
+App/Nina/Info.plist
+App/Nina/Nina.entitlements

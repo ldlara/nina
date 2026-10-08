@@ -1,6 +1,7 @@
 import SwiftUI
 import NinaCore
 
+@MainActor
 struct RootView: View {
     let container: AppContainer
     @Bindable private var session: AppSessionViewModel

@@ -2,6 +2,7 @@ import SwiftUI
 import NinaCore
 
 /// Hospeda o `AuthViewModel` (estado preservado ao alternar entre entrar e criar conta).
+@MainActor
 struct AuthScreen: View {
     let container: AppContainer
     @State private var viewModel: AuthViewModel

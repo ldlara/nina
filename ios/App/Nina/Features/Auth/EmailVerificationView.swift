@@ -1,6 +1,7 @@
 import SwiftUI
 import NinaCore
 
+@MainActor
 struct EmailVerificationScreen: View {
     let container: AppContainer
     @State private var viewModel: EmailVerificationViewModel
