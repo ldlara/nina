@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="common_back">Back</string>
+    <string name="common_cancel">Cancel</string>
+    <string name="common_confirm">Confirm</string>
+    <string name="common_retry">Try again</string>
+    <string name="common_loading">Loading</string>
+    <string name="common_close">Close</string>
+    <string name="common_or">or</string>
+    <string name="common_you">(you)</string>
+
+    <string name="onboarding_title_1">One timeline just for your baby</string>
+    <string name="onboarding_body_1">Sleep, feeding and diapers in one place, easy to log at three in the morning.</string>
+    <string name="onboarding_title_2">Caregivers as a team</string>
+    <string name="onboarding_body_2">Invite your family and give each person the right role: log entries or just follow along.</string>
+    <string name="onboarding_title_3">Guidance, not diagnosis</string>
+    <string name="onboarding_body_3">Nina\'s suggestions help with routine and do not replace advice from a health professional.</string>
+    <string name="onboarding_next">Next</string>
+    <string name="onboarding_skip">Skip</string>
+    <string name="onboarding_start">Get started</string>
+    <string name="onboarding_have_account">I already have an account</string>
+    <string name="onboarding_page_indicator">Page %1$d of %2$d</string>
+
+    <string name="auth_title_register">Create account</string>
+    <string name="auth_title_login">Sign in</string>
+    <string name="auth_email">Email</string>
+    <string name="auth_password">Password</string>
+    <string name="auth_password_help">Use a long password that you do not use anywhere else.</string>
+    <string name="auth_display_name">Your name (optional)</string>
+    <string name="auth_show_password">Show password</string>
+    <string name="auth_hide_password">Hide password</string>
+    <string name="auth_accept_terms">I have read and accept the Terms of Use and the Privacy Policy (version %1$s) — required</string>
+    <string name="auth_accept_terms_required">Accepting the Terms and the Policy is required to create the account.</string>
+    <string name="auth_optional_consents">Optional (you can change this later)</string>
+    <string name="auth_consent_analytics">Help improve Nina with usage statistics, without data that identifies your baby</string>
+    <string name="auth_consent_marketing">Receive news and tips by email</string>
+    <string name="auth_submit_register">Create account</string>
+    <string name="auth_submit_login">Sign in</string>
+    <string name="auth_switch_to_login">I already have an account. Sign in</string>
+    <string name="auth_switch_to_register">I do not have an account. Create one</string>
+    <string name="auth_google">Continue with Google</string>
+    <string name="auth_apple">Continue with Apple</string>
+    <string name="auth_social_unavailable">This sign-in method is not available in this version of the app yet.</string>
+    <string name="auth_legal_loading">Loading document versions…</string>
+    <string name="auth_legal_unavailable">Could not load the Terms and Policy versions.</string>
+
+    <string name="verify_title">Confirm your email</string>
+    <string name="verify_body">We sent a code to %1$s. Enter it below to activate your account.</string>
+    <string name="verify_code">Confirmation code</string>
+    <string name="verify_submit">Confirm email</string>
+    <string name="verify_resend">Resend code</string>
+    <string name="verify_resend_in">Resend in %1$d s</string>
+    <string name="verify_resent">If the email is valid, a new code was sent.</string>
+
+    <string name="babies_title">Your babies</string>
+    <string name="babies_empty_title">No babies yet</string>
+    <string name="babies_empty_body">Create your baby\'s profile to get started, or accept an invitation you received.</string>
+    <string name="babies_add">Add baby</string>
+    <string name="babies_accept_invite">I have an invitation</string>
+    <string name="babies_caregivers">Caregivers</string>
+    <string name="babies_open_profile">View profile</string>
+    <string name="babies_logout">Sign out</string>
+    <string name="babies_offline_cached">No connection. Showing data saved on this device.</string>
+    <string name="babies_item_description">%1$s, %2$s, your role: %3$s</string>
+
+    <string name="baby_form_title_create">Tell us about your baby</string>
+    <string name="baby_form_title_edit">Baby profile</string>
+    <string name="baby_name">What should we call them?</string>
+    <string name="baby_birth_date">Date of birth</string>
+    <string name="baby_due_date">Due date (optional)</string>
+    <string name="baby_due_date_help">Helps adjust the schedule if the baby was born before the due date.</string>
+    <string name="baby_date_not_set">Not set</string>
+    <string name="baby_pick_date">Pick date</string>
+    <string name="baby_clear_due_date">Remove due date</string>
+    <string name="baby_sex">Sex (optional)</string>
+    <string name="baby_timezone">Time zone</string>
+    <string name="baby_guardian_consent">I declare that I am this baby\'s legal guardian and I authorize the processing of their data under the Privacy Policy.</string>
+    <string name="baby_guardian_consent_required">The legal guardian declaration is required.</string>
+    <string name="baby_save_create">Continue</string>
+    <string name="baby_save_edit">Save changes</string>
+    <string name="baby_saved">Profile saved.</string>
+    <string name="baby_read_only_notice">Only the owner can edit the baby profile.</string>
+    <string name="baby_date_picker_confirm">OK</string>
+    <string name="baby_corrected_window_hint">Corrected age is applied up to %1$d months of age.</string>
+
+    <string name="sex_female">Female</string>
+    <string name="sex_male">Male</string>
+    <string name="sex_other">Other</string>
+    <string name="sex_unspecified">Prefer not to say</string>
+
+    <string name="age_section_title">Age</string>
+    <string name="age_chronological">Chronological age: %1$s</string>
+    <string name="age_corrected">Corrected age: %1$s</string>
+    <string name="age_corrected_not_applicable">Corrected age: not applicable</string>
+    <string name="age_source_note">Calculated by the server from the dates you entered.</string>
+    <string name="age_as_of">Updated on %1$s.</string>
+    <plurals name="age_days">
+        <item quantity="one">%1$d day</item>
+        <item quantity="other">%1$d days</item>
+    </plurals>
+    <plurals name="age_weeks">
+        <item quantity="one">%1$d week</item>
+        <item quantity="other">%1$d weeks</item>
+    </plurals>
+    <string name="age_days_and_weeks">%1$s (%2$s)</string>
+
+    <string name="role_owner">Owner</string>
+    <string name="role_caregiver">Caregiver</string>
+    <string name="role_read_only">Read-only</string>
+    <string name="role_unknown">Other</string>
+    <string name="role_caregiver_description">Logs and edits the baby\'s events.</string>
+    <string name="role_read_only_description">Only follows along; cannot log or edit.</string>
+    <string name="status_active">Active</string>
+    <string name="status_pending">Invitation pending</string>
+    <string name="status_revoked">Removed</string>
+    <string name="status_declined">Invitation declined</string>
+    <string name="status_expired">Invitation expired</string>
+    <string name="status_unknown">Other status</string>
+
+    <string name="caregivers_title">Caregivers</string>
+    <string name="caregivers_invite">Invite caregiver</string>
+    <string name="caregivers_owner_only_note">Only the owner can invite and remove people.</string>
+    <string name="caregivers_invitee_unknown">Invited person</string>
+    <string name="caregivers_pending_expires">Invitation expires on %1$s</string>
+    <string name="caregivers_item_description">%1$s, %2$s, %3$s</string>
+    <string name="caregivers_resend">Resend invitation</string>
+    <string name="caregivers_resent">Invitation resent.</string>
+    <string name="caregivers_cancel_invite">Cancel invitation</string>
+    <string name="caregivers_remove">Remove access</string>
+    <string name="caregivers_leave">Leave this baby</string>
+    <string name="caregivers_change_role">Change role</string>
+    <string name="caregivers_remove_title">Remove %1$s?</string>
+    <string name="caregivers_remove_body">%1$s will lose access immediately. The entries they made stay in the baby\'s history.</string>
+    <string name="caregivers_cancel_invite_title">Cancel invitation?</string>
+    <string name="caregivers_cancel_invite_body">The invitation for %1$s will stop working.</string>
+    <string name="caregivers_leave_title">Leave this baby?</string>
+    <string name="caregivers_leave_body">You will lose access to this baby. The data you created stays for the other caregivers.</string>
+    <string name="caregivers_removed">Access removed.</string>
+    <string name="caregivers_role_changed">Role updated.</string>
+    <string name="invite_title">Invite caregiver</string>
+    <string name="invite_email">Person\'s email</string>
+    <string name="invite_role">Role</string>
+    <string name="invite_send">Send invitation</string>
+    <string name="invite_sent">Invitation sent.</string>
+
+    <string name="accept_title">I have an invitation</string>
+    <string name="accept_token_label">Invitation code or link</string>
+    <string name="accept_token_help">Paste the code or link you received by email.</string>
+    <string name="accept_check">View invitation</string>
+    <string name="accept_preview">%1$s invited you to follow %2$s.</string>
+    <string name="accept_preview_role">Your role: %1$s</string>
+    <string name="accept_preview_expires">Valid until %1$s</string>
+    <string name="accept_accept">Accept invitation</string>
+    <string name="accept_decline">Decline</string>
+    <string name="accept_done">Invitation accepted.</string>
+    <string name="accept_declined">Invitation declined.</string>
+
+    <string name="error_prefix">Error: %1$s</string>
+    <string name="error_network">No connection. Check your internet and try again.</string>
+    <string name="error_generic">Something went wrong. Please try again.</string>
+    <string name="error_invalid_credentials">Incorrect email or password.</string>
+    <string name="error_session_expired">Your session expired. Please sign in again.</string>
+    <string name="error_validation">Check the highlighted fields.</string>
+    <string name="error_forbidden_role">You do not have permission to do this.</string>
+    <string name="error_access_revoked">You no longer have access to this baby.</string>
+    <string name="error_consent_required">You need to accept the terms to continue.</string>
+    <string name="error_not_found">We could not find what you were looking for.</string>
+    <string name="error_identity_link_required">This email already uses another sign-in method. Sign in with the original method; you can link the methods later.</string>
+    <string name="error_already_member">This person already has access to this baby.</string>
+    <string name="error_rate_limited">Too many attempts. Wait a moment and try again.</string>
+    <string name="error_version_conflict">Someone else changed this profile. We reloaded the data; review and save again.</string>
+    <string name="error_upgrade_required">Update Nina to continue.</string>
+    <string name="error_server">The service is unavailable right now. Try again later.</string>
+    <string name="error_owner_required">The baby must always have an owner.</string>
+    <string name="error_code_invalid">Invalid or expired code.</string>
+    <string name="error_idempotency">This request was already sent with different data. Please try again.</string>
+
+    <string name="field_required">Required field.</string>
+    <string name="field_invalid">Invalid value.</string>
+    <string name="field_email_invalid">Enter a valid email.</string>
+    <string name="field_future_date">The date cannot be in the future.</string>
+    <string name="field_password_policy">The password does not meet the security policy.</string>
+    <string name="field_name_too_long">Use at most %1$d characters.</string>
+    <string name="field_due_date_invalid">Check the due date.</string>
+</resources>

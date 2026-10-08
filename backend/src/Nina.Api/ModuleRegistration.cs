@@ -21,12 +21,18 @@ internal static class ModuleRegistration
         PrivacyModule.Name,
     ];
 
-    public static IServiceCollection AddNinaModules(this IServiceCollection services) => services
-        .AddIdentityModule()
+    public static IServiceCollection AddNinaModules(this IServiceCollection services, IConfiguration configuration) => services
+        .AddIdentityModule(configuration)
         .AddFamilyModule()
         .AddTrackingModule()
         .AddSleepIntelligenceModule()
         .AddNotificationsModule()
         .AddSubscriptionsModule()
         .AddPrivacyModule();
+
+    public static IEndpointRouteBuilder MapNinaModules(this IEndpointRouteBuilder app)
+    {
+        app.MapIdentityModule();
+        return app;
+    }
 }

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Apenas janela/ícone; as cores da UI vivem em ui/theme (tokens Nina DS v0, ux-spec 6.1). -->
+    <color name="nina_window_background">#FAF8F5</color>
+    <color name="nina_icon_background">#3B5BA9</color>
+    <color name="nina_icon_foreground">#FAF8F5</color>
+</resources>

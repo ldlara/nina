@@ -1,0 +1,613 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Nina.Identity.Contracts;
+using Nina.Identity.Crypto;
+using Nina.Identity.External;
+using Nina.Identity.Mail;
+using Nina.Identity.Persistence;
+using Nina.SharedKernel.Audit;
+using Nina.SharedKernel.Data;
+using Nina.SharedKernel.Http;
+using Nina.SharedKernel.Security;
+using Npgsql;
+
+namespace Nina.Identity.Services;
+
+/// <summary>Cadastro, verificação, login (senha/Google/Apple), refresh rotativo, logout, recuperação e reautenticação.</summary>
+public sealed partial class AuthService(
+    NinaDb db,
+    IOptions<IdentityOptions> options,
+    PasswordHasher hasher,
+    PasswordPolicy policy,
+    TokenService tokens,
+    SessionIssuer issuer,
+    ConsentService consents,
+    IIdentityTokenVerifier verifier,
+    IIdentityMailer mailer,
+    IRateLimiter limiter,
+    SecretKeys keys,
+    AuditLog audit,
+    IRequestContext request,
+    TimeProvider time,
+    ILogger<AuthService> logger)
+{
+    private IdentityOptions Opt => options.Value;
+
+    private RateLimitSettings Limits => options.Value.RateLimits;
+
+    private TimeSpan FailureWindow => TimeSpan.FromMinutes(Limits.FailureWindowMinutes);
+
+    private string Ip => request.ClientIp?.ToString() ?? "unknown";
+
+    // ------------------------------------------------------------------ cadastro
+
+    public async Task<VerificationPending> RegisterAsync(RegisterRequest req, CancellationToken ct)
+    {
+        Enforce(limiter.Consume($"register:ip:{Ip}", Limits.RegisterPerIpPerHour, TimeSpan.FromHours(1)));
+
+        var v = new Validation();
+        var email = v.Email("email", req.Email);
+        var password = v.Required("password", req.Password, 1024);
+        if (req.DisplayName is { Length: > 80 })
+        {
+            v.Add(new FieldError("display_name", "TOO_LONG"));
+        }
+
+        var locale = v.Locale("locale", req.Locale);
+        if (req.Locale is null)
+        {
+            v.Add(new FieldError("locale", "REQUIRED"));
+        }
+
+        var timezone = v.Timezone("timezone", req.Timezone);
+        v.ThrowIfInvalid();
+        v.Add(await policy.ValidateAsync("password", password!, email, ct));
+        v.ThrowIfInvalid();
+
+        var emailAllowed = limiter.Consume($"register:email:{email}", Limits.RegisterPerEmailPerHour, TimeSpan.FromHours(1)).Allowed;
+
+        // Custo de hash idêntico para e-mail novo e existente (SEC-050).
+        var hash = await hasher.HashAsync(password!);
+        var code = OpaqueTokens.NewVerificationCode();
+        var now = time.GetUtcNow();
+
+        RegisterOutcome outcome;
+        try
+        {
+            outcome = await db.InTransactionAsync(null, tx => RegisterCoreAsync(tx, req, email!, locale!, timezone, hash, code, emailAllowed, now), ct);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
+            outcome = RegisterOutcome.None; // corrida entre cadastros do mesmo e-mail: a resposta continua uniforme
+        }
+
+        switch (outcome)
+        {
+            case RegisterOutcome.SendCode:
+                await TrySendAsync(() => mailer.SendVerificationCodeAsync(email!, code, locale!, ct));
+                break;
+            case RegisterOutcome.NotifyExisting:
+                await TrySendAsync(() => mailer.SendAlreadyRegisteredAsync(email!, locale!, ct));
+                break;
+            default:
+                break;
+        }
+
+        return new VerificationPending("VERIFICATION_PENDING", Opt.ResendAfterSeconds);
+    }
+
+    private async Task<RegisterOutcome> RegisterCoreAsync(
+        DbTx tx, RegisterRequest req, string email, string locale, string? timezone, string hash, string code, bool emailAllowed, DateTimeOffset now)
+    {
+        var (accepted, errors, missing) = await ConsentService.ResolveOnboardingAsync(tx, req.Consents, "consents");
+        if (missing.Count > 0 && errors.Count == 0)
+        {
+            errors.Add(new FieldError("consents", "REQUIRED"));
+        }
+
+        if (errors.Count > 0)
+        {
+            throw ProblemException.Validation(errors);
+        }
+
+        var existing = await IdentityStore.FindUserByEmailAsync(tx, email);
+        if (existing is { } user && (user.EmailVerifiedAt is not null || user.Status != "ACTIVE"))
+        {
+            return emailAllowed ? RegisterOutcome.NotifyExisting : RegisterOutcome.None;
+        }
+
+        if (!emailAllowed)
+        {
+            return RegisterOutcome.None;
+        }
+
+        Guid userId;
+        if (existing is null)
+        {
+            userId = Guid.NewGuid();
+            await IdentityStore.InsertUserAsync(tx, userId, email, locale, timezone, null, now);
+        }
+        else
+        {
+            // Cadastro ainda não confirmado: respeita o intervalo de reenvio e substitui a senha (anti pré-sequestro).
+            userId = existing.Id;
+            var last = await IdentityStore.LastRecoveryCreatedAsync(tx, userId);
+            if (last is { } l && now - l < TimeSpan.FromSeconds(Opt.ResendAfterSeconds))
+            {
+                return RegisterOutcome.None;
+            }
+        }
+
+        await tx.SetUserAsync(userId);
+        await IdentityStore.UpsertCredentialAsync(tx, userId, hash, now);
+        await IdentityStore.InvalidateOpenRecoveryAsync(tx, userId, now);
+        await IdentityStore.InsertRecoveryAsync(tx, userId, VerificationHash(userId, code), now, now.AddMinutes(Opt.VerificationCodeMinutes));
+        await consents.RecordOnboardingAsync(tx, userId, accepted, locale, null);
+        await audit.AppendAsync(tx, new AuditEntry("auth.register", userId, "user", userId));
+        return RegisterOutcome.SendCode;
+    }
+
+    public async Task<TokenResponse> VerifyEmailAsync(EmailVerifyRequest req, CancellationToken ct)
+    {
+        var v = new Validation();
+        var email = v.Email("email", req.Email);
+        var code = v.Required("code", req.Code, 16);
+        var device = v.Device("device", req.Device);
+        v.ThrowIfInvalid();
+
+        EnforcePeek($"verify:email:{email}", Limits.VerifyFailuresPerEmail);
+        EnforcePeek($"verify:ip:{Ip}", Limits.VerifyFailuresPerIp);
+
+        var now = time.GetUtcNow();
+        var result = await db.InTransactionAsync(null, async tx =>
+        {
+            var user = await IdentityStore.FindUserByEmailAsync(tx, email!);
+            if (user is null || user.Status != "ACTIVE")
+            {
+                return null;
+            }
+
+            var owner = await IdentityStore.ConsumeRecoveryAsync(tx, VerificationHash(user.Id, code!), now);
+            if (owner != user.Id)
+            {
+                return null;
+            }
+
+            await IdentityStore.MarkEmailVerifiedAsync(tx, user.Id, now);
+            var verified = user with { EmailVerifiedAt = now };
+            return await issuer.IssueAsync(tx, verified, device!, "auth.email_verified", "EMAIL_CODE");
+        }, ct);
+
+        if (result is null)
+        {
+            limiter.Record($"verify:email:{email}", FailureWindow);
+            limiter.Record($"verify:ip:{Ip}", FailureWindow);
+            await AuditFailureAsync("auth.email_verify_failed", null, device!.DeviceId, ct);
+            throw ProblemException.Unauthorized("INVALID_VERIFICATION_CODE", "Invalid or expired code");
+        }
+
+        limiter.Reset($"verify:email:{email}");
+        return result;
+    }
+
+    // --------------------------------------------------------------------- login
+
+    public async Task<TokenResponse> LoginAsync(LoginRequest req, CancellationToken ct)
+    {
+        var v = new Validation();
+        var email = v.Email("email", req.Email);
+        var password = v.Required("password", req.Password, 1024);
+        var device = v.Device("device", req.Device);
+        v.ThrowIfInvalid();
+
+        var accountIp = $"login:acct-ip:{email}:{Ip}";
+        var account = $"login:acct:{email}";
+        var ipKey = $"login:ip:{Ip}";
+        EnforcePeek(accountIp, Limits.LoginFailuresPerAccountAndIp);
+        EnforcePeek(account, Limits.LoginFailuresPerAccount);
+        EnforcePeek(ipKey, Limits.LoginFailuresPerIp);
+
+        var user = await db.InTransactionAsync(null, tx => IdentityStore.FindUserByEmailAsync(tx, email!), ct);
+        var check = new PasswordCheck(false, false);
+        if (user?.PasswordHash is { } stored)
+        {
+            check = await hasher.VerifyAsync(password!, stored);
+        }
+        else
+        {
+            await hasher.BurnAsync(password!);
+        }
+
+        if (!check.Valid || user is null || user.EmailVerifiedAt is null)
+        {
+            limiter.Record(accountIp, FailureWindow);
+            limiter.Record(account, FailureWindow);
+            limiter.Record(ipKey, FailureWindow);
+            await AuditFailureAsync("auth.login_failed", user?.Id, device!.DeviceId, ct);
+            throw ProblemException.Unauthorized("INVALID_CREDENTIALS", "Invalid credentials");
+        }
+
+        limiter.Reset(accountIp);
+        var newHash = check.NeedsRehash ? await hasher.HashAsync(password!) : null;
+        var now = time.GetUtcNow();
+        return await db.InTransactionAsync(user.Id, async tx =>
+        {
+            if (newHash is not null)
+            {
+                await IdentityStore.UpsertCredentialAsync(tx, user.Id, newHash, now);
+            }
+
+            return await issuer.IssueAsync(tx, user, device!, "auth.login", "PASSWORD");
+        }, ct);
+    }
+
+    public async Task<TokenResponse> LoginSocialAsync(string provider, SocialLoginRequest req, CancellationToken ct)
+    {
+        Enforce(limiter.Consume($"social:ip:{Ip}", Limits.SocialPerIpPerMinute, TimeSpan.FromMinutes(1)));
+
+        var v = new Validation();
+        var idToken = v.Required("id_token", req.IdToken);
+        var nonce = v.Required("nonce", req.Nonce, 256);
+        var device = v.Device("device", req.Device);
+        var locale = v.Locale("locale", req.Locale);
+        var timezone = v.Timezone("timezone", req.Timezone);
+        v.ThrowIfInvalid();
+
+        var identity = await VerifyExternalAsync(provider, idToken!, nonce!, device!.DeviceId, ct);
+        var now = time.GetUtcNow();
+        return await db.InTransactionAsync(null, async tx =>
+        {
+            var link = await IdentityStore.FindIdentityAsync(tx, provider, identity.Subject);
+            if (link is not null)
+            {
+                var linked = await IdentityStore.FindUserByIdAsync(tx, link.UserId)
+                             ?? throw ProblemException.Unauthorized("INVALID_ID_TOKEN", "Invalid identity token");
+                return await issuer.IssueAsync(tx, linked, device, "auth.login", provider);
+            }
+
+            if (string.IsNullOrWhiteSpace(identity.Email) || !identity.EmailVerified)
+            {
+                throw ProblemException.Unauthorized("INVALID_ID_TOKEN", "Invalid identity token");
+            }
+
+            var email = Validation.NormalizeEmail(identity.Email);
+            if (await IdentityStore.FindUserByEmailAsync(tx, email) is not null)
+            {
+                // ADR-0007: nunca funde contas pelo e-mail; o usuário entra pelo método original e vincula em /me/identities.
+                throw ProblemException.Conflict("IDENTITY_LINK_REQUIRED", "Sign in with your original method and link this identity");
+            }
+
+            var (accepted, errors, missing) = await ConsentService.ResolveOnboardingAsync(tx, req.Consents, "consents");
+            if (errors.Count > 0)
+            {
+                throw ProblemException.Validation(errors);
+            }
+
+            if (missing.Count > 0)
+            {
+                throw new ProblemException(StatusCodes.Status403Forbidden, "CONSENT_REQUIRED", "Consent required")
+                {
+                    Extensions = new Dictionary<string, object?> { ["required_consents"] = missing },
+                };
+            }
+
+            var userId = Guid.NewGuid();
+            var effectiveLocale = locale ?? Opt.DefaultLocale;
+            await IdentityStore.InsertUserAsync(tx, userId, email, effectiveLocale, timezone, now, now);
+            await tx.SetUserAsync(userId);
+            await IdentityStore.InsertIdentityAsync(tx, userId, provider, identity.Subject, email, now);
+            await consents.RecordOnboardingAsync(tx, userId, accepted, effectiveLocale, device);
+            await audit.AppendAsync(tx, new AuditEntry("auth.register", userId, "user", userId, device.DeviceId, Metadata: new Dictionary<string, object?> { ["method"] = provider }));
+            var created = await IdentityStore.FindUserByIdAsync(tx, userId);
+            return await issuer.IssueAsync(tx, created!, device, "auth.login", provider);
+        }, ct);
+    }
+
+    public async Task<VerifiedIdentity> VerifyExternalAsync(string provider, string idToken, string nonce, Guid? deviceId, CancellationToken ct)
+    {
+        try
+        {
+            return await verifier.VerifyAsync(provider, idToken, nonce, ct);
+        }
+        catch (IdentityTokenException)
+        {
+            await AuditFailureAsync("auth.login_failed", null, deviceId, ct);
+            throw ProblemException.Unauthorized("INVALID_ID_TOKEN", "Invalid identity token");
+        }
+    }
+
+    // ------------------------------------------------------------ refresh / logout
+
+    public async Task<TokenResponse> RefreshAsync(RefreshRequest req, CancellationToken ct)
+    {
+        Enforce(limiter.Consume($"refresh:ip:{Ip}", Limits.RefreshPerIpPerMinute, TimeSpan.FromMinutes(1)));
+        var v = new Validation();
+        var token = v.Required("refresh_token", req.RefreshToken, 256);
+        if (req.DeviceId is null || req.DeviceId == Guid.Empty)
+        {
+            v.Add(new FieldError("device_id", "REQUIRED"));
+        }
+
+        v.ThrowIfInvalid();
+        if (!OpaqueTokens.TryParseRefreshToken(token, out var userId, out var sessionId))
+        {
+            throw ProblemException.Unauthorized("INVALID_REFRESH_TOKEN", "Invalid refresh token");
+        }
+
+        var now = time.GetUtcNow();
+        var hash = OpaqueTokens.HashRefreshToken(token!);
+        var outcome = await db.InTransactionAsync(userId, async tx =>
+        {
+            var stored = await IdentityStore.GetRefreshTokenForUpdateAsync(tx, hash);
+            if (stored is null || stored.SessionId != sessionId)
+            {
+                return RefreshResult.Fail("INVALID_REFRESH_TOKEN");
+            }
+
+            // RLS: se o userId do token não for o dono da sessão, a linha não aparece.
+            var session = await IdentityStore.GetSessionAsync(tx, sessionId, forUpdate: true);
+            if (session is null || session.DeviceId != req.DeviceId)
+            {
+                return RefreshResult.Fail("INVALID_REFRESH_TOKEN");
+            }
+
+            if (session.RevokedAt is not null)
+            {
+                return RefreshResult.Fail("SESSION_REVOKED");
+            }
+
+            if (stored.UsedAt is not null)
+            {
+                // Reuso de token já rotacionado: derruba a família inteira (SEC-011).
+                await IdentityStore.RevokeSessionAsync(tx, sessionId, "REUSE_DETECTED", now);
+                await IdentityStore.DeletePushTokensAsync(tx, userId, [session.DeviceId]);
+                await audit.AppendAsync(tx, new AuditEntry(
+                    "auth.refresh_reuse_detected", userId, "session", sessionId, session.DeviceId, "DENIED", IsCritical: true));
+                return RefreshResult.Fail("REFRESH_TOKEN_REUSED");
+            }
+
+            if (now >= stored.ExpiresAt || now >= session.AbsoluteExpiresAt)
+            {
+                return RefreshResult.Fail("SESSION_EXPIRED");
+            }
+
+            var user = await IdentityStore.FindUserByIdAsync(tx, userId);
+            if (user is null)
+            {
+                return RefreshResult.Fail("INVALID_REFRESH_TOKEN");
+            }
+
+            await IdentityStore.MarkRefreshTokenUsedAsync(tx, stored.Id, now);
+            var next = OpaqueTokens.NewRefreshToken(userId, sessionId);
+            var expires = SessionIssuer.Min(now.AddDays(Opt.RefreshTokenDays), session.AbsoluteExpiresAt);
+            await IdentityStore.InsertRefreshTokenAsync(tx, sessionId, OpaqueTokens.HashRefreshToken(next), now, expires);
+            await IdentityStore.TouchSessionAsync(tx, sessionId, now);
+            var response = await issuer.BuildAsync(tx, user, sessionId, session.DeviceId, next, expires, Opt.DefaultLocale);
+            return RefreshResult.Ok(response);
+        }, ct);
+
+        if (outcome.Response is null)
+        {
+            throw ProblemException.Unauthorized(outcome.ErrorCode!, outcome.ErrorCode switch
+            {
+                "SESSION_REVOKED" => "Session revoked",
+                "REFRESH_TOKEN_REUSED" => "Refresh token reused",
+                "SESSION_EXPIRED" => "Session expired",
+                _ => "Invalid refresh token",
+            });
+        }
+
+        return outcome.Response;
+    }
+
+    public async Task LogoutAsync(Guid userId, Guid sessionId, CancellationToken ct)
+    {
+        var now = time.GetUtcNow();
+        await db.InTransactionAsync(userId, async tx =>
+        {
+            var session = await IdentityStore.GetSessionAsync(tx, sessionId, forUpdate: true);
+            if (session is null)
+            {
+                return;
+            }
+
+            if (session.RevokedAt is null)
+            {
+                await IdentityStore.RevokeSessionAsync(tx, sessionId, "LOGOUT", now);
+                await audit.AppendAsync(tx, new AuditEntry("auth.logout", userId, "session", sessionId, session.DeviceId));
+            }
+
+            await IdentityStore.DeletePushTokensAsync(tx, userId, [session.DeviceId]);
+        }, ct);
+    }
+
+    // ------------------------------------------------------- recuperação de senha
+
+    public async Task ForgotPasswordAsync(ForgotPasswordRequest req, CancellationToken ct)
+    {
+        Enforce(limiter.Consume($"forgot:ip:{Ip}", Limits.ForgotPerIpPerHour, TimeSpan.FromHours(1)));
+        var v = new Validation();
+        var email = v.Email("email", req.Email);
+        v.ThrowIfInvalid();
+        var allowed = limiter.Consume($"forgot:email:{email}", Limits.ForgotPerEmailPerHour, TimeSpan.FromHours(1)).Allowed;
+
+        var token = OpaqueTokens.NewUrlToken();
+        var now = time.GetUtcNow();
+        var locale = await db.InTransactionAsync(null, async tx =>
+        {
+            var user = await IdentityStore.FindUserByEmailAsync(tx, email!);
+            if (user is null || user.Status != "ACTIVE" || !allowed)
+            {
+                return null;
+            }
+
+            await IdentityStore.InsertRecoveryAsync(tx, user.Id, ResetHash(token), now, now.AddMinutes(Opt.PasswordResetMinutes));
+            await audit.AppendAsync(tx, new AuditEntry("auth.password_reset_requested", user.Id, "user", user.Id));
+            return user.Locale ?? Opt.DefaultLocale;
+        }, ct);
+
+        if (locale is not null)
+        {
+            await TrySendAsync(() => mailer.SendPasswordResetAsync(email!, token, locale, ct));
+        }
+    }
+
+    public async Task ResetPasswordAsync(ResetPasswordRequest req, CancellationToken ct)
+    {
+        EnforcePeek($"reset:ip:{Ip}", Limits.ResetFailuresPerIp);
+        var v = new Validation();
+        var token = v.Required("token", req.Token, 256);
+        var password = v.Required("new_password", req.NewPassword, 1024);
+        v.ThrowIfInvalid();
+        v.Add(await policy.ValidateAsync("new_password", password!, null, ct));
+        v.ThrowIfInvalid();
+
+        var hash = await hasher.HashAsync(password!);
+        var now = time.GetUtcNow();
+        var notify = await db.InTransactionAsync<(string Email, string Locale)?>(null, async tx =>
+        {
+            var userId = await IdentityStore.ConsumeRecoveryAsync(tx, ResetHash(token!), now);
+            if (userId is null)
+            {
+                return null;
+            }
+
+            await tx.SetUserAsync(userId.Value);
+            var user = await IdentityStore.FindUserByIdAsync(tx, userId.Value);
+            if (user is null || user.Status != "ACTIVE")
+            {
+                return null;
+            }
+
+            await IdentityStore.UpsertCredentialAsync(tx, userId.Value, hash, now);
+            await IdentityStore.MarkEmailVerifiedAsync(tx, userId.Value, now);
+            await IdentityStore.InvalidateOpenRecoveryAsync(tx, userId.Value, now);
+            var devices = await IdentityStore.RevokeAllSessionsAsync(tx, userId.Value, null, "PASSWORD_CHANGED", now);
+            await IdentityStore.DeletePushTokensAsync(tx, userId.Value, devices);
+            await audit.AppendAsync(tx, new AuditEntry("auth.password_reset", userId, "user", userId, IsCritical: true));
+            return (user.Email, user.Locale ?? Opt.DefaultLocale);
+        }, ct);
+
+        if (notify is null)
+        {
+            limiter.Record($"reset:ip:{Ip}", FailureWindow);
+            throw ProblemException.Unauthorized("INVALID_RESET_TOKEN", "Invalid or expired token");
+        }
+
+        await TrySendAsync(() => mailer.SendSecurityNoticeAsync(notify.Value.Email, SecurityNotice.PasswordReset, notify.Value.Locale, ct));
+    }
+
+    // ------------------------------------------------------------ reautenticação
+
+    public async Task<ReauthResponse> ReauthenticateAsync(Guid userId, Guid sessionId, ReauthRequest req, CancellationToken ct)
+    {
+        var key = $"reauth:user:{userId:N}";
+        EnforcePeek(key, Limits.ReauthFailuresPerUser);
+
+        var v = new Validation();
+        var usingProvider = req.Provider is not null || req.IdToken is not null;
+        if (req.Password is null && !usingProvider)
+        {
+            v.Add(new FieldError("password", "REQUIRED"));
+        }
+
+        if (usingProvider)
+        {
+            if (!Providers.IsKnown(req.Provider))
+            {
+                v.Add(new FieldError("provider", req.Provider is null ? "REQUIRED" : "UNSUPPORTED_VALUE"));
+            }
+
+            v.Required("id_token", req.IdToken);
+            v.Required("nonce", req.Nonce, 256);
+        }
+
+        v.ThrowIfInvalid();
+
+        var user = await db.InTransactionAsync(userId, tx => IdentityStore.FindUserByIdAsync(tx, userId), ct);
+        var ok = false;
+        if (user is not null)
+        {
+            if (usingProvider)
+            {
+                var identity = await VerifyExternalAsync(req.Provider!, req.IdToken!, req.Nonce!, null, ct);
+                var link = await db.InTransactionAsync(null, tx => IdentityStore.FindIdentityAsync(tx, identity.Provider, identity.Subject), ct);
+                ok = link?.UserId == userId;
+            }
+            else if (user.PasswordHash is { } stored)
+            {
+                ok = (await hasher.VerifyAsync(req.Password!, stored)).Valid;
+            }
+            else
+            {
+                await hasher.BurnAsync(req.Password!);
+            }
+        }
+
+        if (!ok)
+        {
+            limiter.Record(key, FailureWindow);
+            await AuditFailureAsync("auth.reauth_failed", userId, null, ct);
+            throw ProblemException.Unauthorized("INVALID_CREDENTIALS", "Invalid credentials");
+        }
+
+        limiter.Reset(key);
+        await db.InTransactionAsync(userId, tx => audit.AppendAsync(tx, new AuditEntry("auth.reauthenticated", userId, "session", sessionId)), ct);
+        var (token, expiresIn) = tokens.IssueReauthToken(userId, sessionId);
+        return new ReauthResponse(token, expiresIn);
+    }
+
+    // ------------------------------------------------------------------- helpers
+
+    private byte[] VerificationHash(Guid userId, string code) => keys.Hmac("email-verify", $"{userId:N}:{code}");
+
+    private byte[] ResetHash(string token) => keys.Hmac("password-reset", token);
+
+    private static void Enforce(RateLimitDecision decision)
+    {
+        if (!decision.Allowed)
+        {
+            throw ProblemException.RateLimited(decision.RetryAfterSeconds);
+        }
+    }
+
+    private void EnforcePeek(string key, int limit) => Enforce(limiter.Peek(key, limit, FailureWindow));
+
+    private async Task AuditFailureAsync(string action, Guid? userId, Guid? deviceId, CancellationToken ct)
+    {
+        await db.InTransactionAsync(null, tx => audit.AppendAsync(tx, new AuditEntry(
+            action, userId, userId is null ? null : "user", userId, deviceId, "FAILURE")), ct);
+    }
+
+    // Falha de envio não pode diferenciar e-mail novo de existente (anti-enumeração); registra só o tipo do erro.
+    private async Task TrySendAsync(Func<Task> send)
+    {
+#pragma warning disable CA1031 // qualquer falha do provedor de e-mail é tratada igualmente
+        try
+        {
+            await send();
+        }
+        catch (Exception ex)
+        {
+            LogMailFailure(logger, ex.GetType().Name);
+        }
+#pragma warning restore CA1031
+    }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Falha ao enviar e-mail transacional ({ExceptionType})")]
+    private static partial void LogMailFailure(ILogger logger, string exceptionType);
+
+    private enum RegisterOutcome
+    {
+        None,
+        SendCode,
+        NotifyExisting,
+    }
+
+    private sealed record RefreshResult(TokenResponse? Response, string? ErrorCode)
+    {
+        public static RefreshResult Ok(TokenResponse response) => new(response, null);
+
+        public static RefreshResult Fail(string code) => new(null, code);
+    }
+}

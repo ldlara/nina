@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
+    <ProjectReference Include="..\Nina.SharedKernel\Nina.SharedKernel.csproj" />
     <ProjectReference Include="..\Modules\Nina.Identity\Nina.Identity.csproj" />
     <ProjectReference Include="..\Modules\Nina.Family\Nina.Family.csproj" />
     <ProjectReference Include="..\Modules\Nina.Tracking\Nina.Tracking.csproj" />

@@ -1,0 +1,7 @@
+Nina.xcodeproj/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+DerivedData/
+.build/
+.swiftpm/
+*.xcuserstate
