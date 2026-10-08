@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -106,7 +107,7 @@ public static class NinaAuthentication
 internal sealed class SessionValidatorStartupCheck(IServiceProvider services) : Microsoft.Extensions.Hosting.IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken) =>
-        services.GetService<ISessionValidator>() is null
+        !services.GetRequiredService<IServiceProviderIsService>().IsService(typeof(ISessionValidator))
             ? throw new InvalidOperationException("ISessionValidator não registrado: a revogação de sessão não seria aplicada (NR-17).")
             : Task.CompletedTask;
 
