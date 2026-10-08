@@ -336,6 +336,7 @@ paths:
       x-rf: [RF-054]
       x-roles: [Any]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Sessão encerrada. }
         '401': { $ref: '#/components/responses/Unauthorized' }
   /auth/password/forgot:
@@ -353,8 +354,9 @@ paths:
             schema:
               type: object
               required: [email]
+              additionalProperties: false
               properties:
-                email: { type: string, format: email }
+                email: { $ref: '#/components/schemas/EmailAddress' }
       responses:
         '202': { description: 'Se o e-mail existir, instruções foram enviadas.' }
         '400': { $ref: '#/components/responses/ValidationError' }
@@ -380,9 +382,10 @@ paths:
             schema:
               type: object
               required: [token, new_password]
+              additionalProperties: false
               properties:
-                token: { type: string, writeOnly: true }
-                new_password: { type: string, format: password, writeOnly: true }
+                token: { type: string, writeOnly: true, minLength: 16, maxLength: 512 }
+                new_password: { type: string, format: password, writeOnly: true, maxLength: 128 }
       responses:
         '204': { description: Senha alterada. }
         '400': { $ref: '#/components/responses/ValidationError' }
@@ -433,6 +436,7 @@ paths:
       x-rf: [RF-001, RF-040]
       x-roles: [Any]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Usuário.
           content:
@@ -451,6 +455,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UserUpdate' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Usuário atualizado.
           content:
@@ -476,8 +481,9 @@ paths:
             schema:
               type: object
               required: [new_password]
+              additionalProperties: false
               properties:
-                new_password: { type: string, format: password, writeOnly: true }
+                new_password: { type: string, format: password, writeOnly: true, maxLength: 128 }
       responses:
         '204': { description: Senha alterada. }
         '400': { $ref: '#/components/responses/ValidationError' }
@@ -501,8 +507,9 @@ paths:
             schema:
               type: object
               required: [new_email]
+              additionalProperties: false
               properties:
-                new_email: { type: string, format: email }
+                new_email: { $ref: '#/components/schemas/EmailAddress' }
       responses:
         '202': { description: Código enviado (resposta uniforme). }
         '400': { $ref: '#/components/responses/ValidationError' }
@@ -526,9 +533,11 @@ paths:
             schema:
               type: object
               required: [code]
+              additionalProperties: false
               properties:
-                code: { type: string, writeOnly: true }
+                code: { $ref: '#/components/schemas/VerificationCode' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: E-mail alterado; as outras sessões foram revogadas.
           content:
@@ -554,11 +563,13 @@ paths:
             schema:
               type: object
               required: [provider, id_token, nonce]
+              additionalProperties: false
               properties:
                 provider: { $ref: '#/components/schemas/IdentityProvider' }
-                id_token: { type: string, writeOnly: true }
-                nonce: { type: string }
+                id_token: { type: string, writeOnly: true, minLength: 16, maxLength: 4096 }
+                nonce: { type: string, minLength: 8, maxLength: 256 }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Identidade vinculada.
           content:
@@ -583,6 +594,7 @@ paths:
           schema: { $ref: '#/components/schemas/IdentityProvider' }
         - $ref: '#/components/parameters/ReauthToken'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Desvinculada. }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -596,6 +608,7 @@ paths:
       x-rf: [RF-054]
       x-roles: [Any]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Sessões ativas.
           content:
@@ -622,6 +635,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Revogada (idempotente). }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -634,6 +648,7 @@ paths:
       x-rf: [RF-002, RF-054]
       x-roles: [Any]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Quantidade de sessões revogadas.
           content:
@@ -671,6 +686,7 @@ paths:
                   locale: pt-BR
                   os_notifications_authorized: true
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Registrado.
           content:
@@ -687,6 +703,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/DeviceId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Removido (idempotente). }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
@@ -700,6 +717,7 @@ paths:
       x-rf: [RF-004]
       x-roles: [Owner, Caregiver, ReadOnly]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Bebês.
           content:
@@ -736,6 +754,7 @@ paths:
                   due_date: '2026-01-24'
                   timezone: America/Sao_Paulo
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Bebê criado.
           headers:
@@ -760,6 +779,7 @@ paths:
       x-rf: [RF-004, RF-005]
       x-roles: [Owner, Caregiver, ReadOnly]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Bebê.
           headers:
@@ -788,6 +808,7 @@ paths:
           application/merge-patch+json:
             schema: { $ref: '#/components/schemas/BabyUpdate' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Bebê atualizado.
           content:
@@ -833,6 +854,7 @@ paths:
           required: false
           schema: { type: boolean, default: false }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Excluído. }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -851,6 +873,7 @@ paths:
       x-rf: [RF-006]
       x-roles: [Owner, Caregiver, ReadOnly]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Vínculos.
           content:
@@ -886,6 +909,7 @@ paths:
               properties:
                 role: { $ref: '#/components/schemas/InvitableRole' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Vínculo atualizado.
           content:
@@ -907,6 +931,7 @@ paths:
       x-rf: [RF-006, RF-007, RF-055]
       x-roles: [Owner, "Caregiver/ReadOnly (apenas o próprio vínculo)"]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Removido. }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -994,6 +1019,7 @@ paths:
               properties:
                 new_owner_membership_id: { type: string, format: uuid }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Propriedade transferida.
           content:
@@ -1067,6 +1093,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/InvitationToken' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Recusado. }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1109,6 +1136,7 @@ paths:
           in: query
           schema: { type: boolean, default: true }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Página de eventos.
           content:
@@ -1149,6 +1177,7 @@ paths:
       x-rf: [RF-019, RF-020]
       x-roles: [Owner, Caregiver, ReadOnly]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Evento.
           content:
@@ -1172,6 +1201,7 @@ paths:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/PageToken'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Histórico, mais recente primeiro.
           content:
@@ -1434,6 +1464,7 @@ paths:
       x-rf: [RF-011, RF-012, RF-013]
       x-roles: [Owner, Caregiver, ReadOnly]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Previsões vigentes.
           content:
@@ -1471,6 +1502,7 @@ paths:
       x-rf: [RF-014]
       x-roles: [Owner, Caregiver, ReadOnly]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Preferências (campos nulos = padrão por idade).
           headers:
@@ -1498,6 +1530,7 @@ paths:
             examples:
               default: { value: { target_nap_count: 3, bedtime_from: '19:30', bedtime_to: '20:30' } }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Preferências salvas.
           content:
@@ -1515,6 +1548,7 @@ paths:
       x-rf: [RF-014]
       x-roles: [Owner, Caregiver]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Removidas. }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1558,6 +1592,7 @@ paths:
           style: form
           explode: false
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Agregações.
           content:
@@ -1602,6 +1637,7 @@ paths:
       x-rf: [RF-037, RF-038, RF-040]
       x-roles: [Owner, Caregiver, ReadOnly]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Preferências.
           content:
@@ -1632,6 +1668,7 @@ paths:
                     - { category: NAP, enabled: true, lead_time_minutes: 10, quiet_hours_start: '22:00', quiet_hours_end: '06:00' }
                     - { category: BEDTIME, enabled: true, lead_time_minutes: 15, quiet_hours_start: null, quiet_hours_end: null }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Preferências salvas.
           content:
@@ -1655,6 +1692,7 @@ paths:
       x-rf: [RF-041, RF-043]
       x-roles: [Any]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Entitlement.
           content:
@@ -1766,6 +1804,7 @@ paths:
                 - required: [email]
               additionalProperties: false
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Assento atribuído.
           content:
@@ -1783,6 +1822,7 @@ paths:
       x-roles: [Owner]
       x-status: proposed
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Assento liberado. }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1824,6 +1864,7 @@ paths:
           in: query
           schema: { type: boolean, default: false }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Consentimentos.
           content:
@@ -1847,6 +1888,7 @@ paths:
             examples:
               revoke: { value: { purpose_key: ANALYTICS_PRODUCT, document_version: 1.0.0, status: REVOKED, source: SETTINGS } }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Registro criado.
           content:
@@ -1865,6 +1907,7 @@ paths:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/PageToken'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Pedidos.
           content:
@@ -1928,6 +1971,7 @@ paths:
       x-rf: [RF-044]
       x-roles: [Any]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Pedido.
           content:
@@ -1949,6 +1993,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/ReauthToken'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Link.
           content:
@@ -1971,6 +2016,7 @@ paths:
       x-rf: [RF-045]
       x-roles: [Any]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Pedido vigente.
           content:
@@ -2023,6 +2069,7 @@ paths:
               cascade:
                 value: { confirm: true, acknowledge_store_subscription: true, acknowledge_other_caregivers: true }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '202':
           description: Exclusão agendada para o fim da janela de arrependimento (`scheduled_for`).
           content:
@@ -2067,6 +2114,7 @@ paths:
       x-rf: [RF-045]
       x-roles: [Any]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Cancelada. }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2083,6 +2131,7 @@ paths:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/PageToken'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Requisições.
           content:
@@ -2180,6 +2229,7 @@ paths:
       x-rf: [RF-044, RF-045]
       x-roles: [Any]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Requisição.
           content:
@@ -2197,6 +2247,7 @@ paths:
       x-rf: [RF-045]
       x-roles: [Any]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Cancelada. }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2213,6 +2264,7 @@ paths:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/PageToken'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Eventos, mais recentes primeiro.
           content:
@@ -2232,6 +2284,7 @@ paths:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/PageToken'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Eventos.
           content:
@@ -2256,6 +2309,7 @@ paths:
       x-rf: [RF-016, RF-018, RF-008]
       x-roles: [Any]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Dados de referência.
           headers:
@@ -2287,6 +2341,11 @@ paths:
                       pumping_volume_ml_max: 500
                       notes_max_length: 500
                       sync_max_mutations_per_push: 100
+                      sync_max_payload_bytes: 262144
+                      sync_max_clock_skew_seconds: 86400
+                      password_min_length: 10
+                      password_max_length: 128
+                      reauth_token_ttl_seconds: 300
                       sync_tombstone_retention_days: 90
                       invitation_ttl_days: 7
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -2298,7 +2357,13 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Access token de até 15 minutos. Obtido em login/refresh. Nunca em URL nem em log.
+      description: |
+        Access token de até 15 minutos. Obtido em login/refresh. Nunca em URL nem em log. O cliente o trata como
+        opaco. Perfil do servidor (SR-013.4): JWT assinado com algoritmo assimétrico fixado na configuração (`EdDSA`
+        ou `ES256`; `none`, `HS*` e `RS256` recusados), `typ=at+jwt`, `kid` obrigatório com rotação de chaves,
+        claims `iss=https://api.nina.app`, `aud=nina-api`, `sub`, `sid`, `jti`, `iat`, `nbf`, `exp` (<= 900 s),
+        tolerância de relógio <= 60 s. A cada requisição o servidor verifica a revogação da sessão (`sid`) e o vínculo
+        com o bebê; papéis nunca vêm do token. Detalhes na seção "Segurança" da descrição geral.
 
   headers:
     ETag:
@@ -2308,7 +2373,8 @@ components:
       description: '`true` se a resposta é reprodução de uma requisição anterior com a mesma `Idempotency-Key`.'
       schema: { type: boolean }
     RetryAfter:
-      description: Segundos até nova tentativa.
+      description: Segundos (inteiro, delta-seconds da RFC 9110) até nova tentativa. Presente em toda resposta `429`.
+      required: true
       schema: { type: integer, minimum: 0 }
 
   parameters:
@@ -2370,8 +2436,25 @@ components:
       name: X-Reauth-Token
       in: header
       required: true
-      description: Token de `/auth/reauthenticate` (curta duração).
-      schema: { type: string }
+      description: |
+        Token de `/auth/reauthenticate` (validade máxima de 300 s), **vinculado à sessão** (`sid`) e a um **escopo**
+        (`ReauthScope`) e de **uso único** (`jti`). Cada operação sensível declara o escopo exigido em `x-reauth-scope`:
+        `ACCOUNT_PASSWORD_CHANGE` (`PUT /me/password`), `ACCOUNT_EMAIL_CHANGE` (`POST /me/email-changes`),
+        `IDENTITY_LINK` (`POST /me/identities`), `IDENTITY_UNLINK` (`DELETE /me/identities/{provider}`),
+        `DATA_EXPORT_REQUEST` (`POST /me/data-exports`), `DATA_EXPORT_DOWNLOAD`
+        (`POST /me/data-exports/{export_id}/download-links`), `ACCOUNT_DELETE` (`POST /me/deletion-request`),
+        `PRIVACY_REQUEST` (`POST /me/privacy-requests`), `BABY_DELETE` (`DELETE /babies/{baby_id}`) e
+        `OWNERSHIP_TRANSFER` (`POST /babies/{baby_id}/ownership-transfer`). Ausente, expirado, já usado, de outra
+        sessão ou de outro escopo: `401 REAUTH_REQUIRED`.
+      schema: { type: string, minLength: 16, maxLength: 4096 }
+    ReauthTokenOptional:
+      name: X-Reauth-Token
+      in: header
+      required: false
+      description: |
+        Mesmo token de `ReauthToken`, **opcional** nesta operação por compatibilidade com a v1.0.0. Quando enviado,
+        é validado (escopo, sessão, uso único) e registrado na auditoria; inválido gera `401 REAUTH_REQUIRED`.
+      schema: { type: string, minLength: 16, maxLength: 4096 }
 
   responses:
     ValidationError:
@@ -2543,7 +2626,10 @@ components:
                 status: 426
                 code: CLIENT_UPGRADE_REQUIRED
     TooManyRequests:
-      description: Limite de taxa excedido.
+      description: |
+        Limite de taxa (`RATE_LIMITED`, por IP, conta e dispositivo) ou cota de volume (`QUOTA_EXCEEDED`) excedido.
+        O cabeçalho `Retry-After` (segundos) é obrigatório e é a fonte de verdade da espera; o mesmo valor vem em
+        `retry_after_seconds` no corpo. Aplica-se a **todas** as operações (SEC-040, SR-013.2).
       headers:
         Retry-After: { $ref: '#/components/headers/RetryAfter' }
       content:
@@ -2556,6 +2642,14 @@ components:
                 title: Too many requests
                 status: 429
                 code: RATE_LIMITED
+                retry_after_seconds: 30
+            quota:
+              value:
+                type: https://api.nina.app/problems/quota-exceeded
+                title: Daily quota exceeded
+                status: 429
+                code: QUOTA_EXCEEDED
+                retry_after_seconds: 3600
     CursorExpired:
       description: Cursor expirado (> 90 dias) ou inválido; resync completo obrigatório.
       content:
@@ -2595,7 +2689,11 @@ components:
           description: Identificador da ocorrência.
         code:
           type: string
-          description: 'Código estável em UPPER_SNAKE_CASE.'
+          description: |
+            Código estável em UPPER_SNAKE_CASE. Valores adicionados na v1.0.1: `QUOTA_EXCEEDED` (429),
+            `ENTITY_ID_UNAVAILABLE` e `ENTITY_QUOTA_EXCEEDED` (por mutação de sync), `INVALID_VERIFICATION_CODE`,
+            `INVALID_RESET_TOKEN`, `INVALID_ID_TOKEN` e `INVALID_REFRESH_TOKEN` (401). O cliente trata códigos
+            desconhecidos pela classe HTTP.
           examples: [VALIDATION_FAILED]
         request_id:
           type: string
@@ -2658,9 +2756,58 @@ components:
       type: string
       enum: [GOOGLE, APPLE]
 
+    TimeZoneId:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: '^[A-Za-z][A-Za-z0-9_+\-]*(/[A-Za-z0-9_+\-]+){0,2}$'
+      description: Identificador IANA (ex.: `America/Sao_Paulo`, `UTC`). O servidor valida contra a base de fusos.
+      examples: [America/Sao_Paulo]
+    LocaleTag:
+      type: string
+      minLength: 2
+      maxLength: 35
+      pattern: '^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$'
+      description: Etiqueta BCP 47 (ex.: `pt-BR`).
+      examples: [pt-BR]
+    DocumentVersion:
+      type: string
+      minLength: 1
+      maxLength: 32
+      pattern: '^[0-9A-Za-z][0-9A-Za-z.+\-]*$'
+      examples: ['1.0.0']
+    EmailAddress:
+      type: string
+      format: email
+      maxLength: 254
+    VerificationCode:
+      type: string
+      writeOnly: true
+      minLength: 6
+      maxLength: 12
+      pattern: '^[0-9]{6,12}$'
+      description: Código numérico de uso único recebido por e-mail (política em `POST /auth/email/verify`).
+    ReauthScope:
+      type: string
+      description: |
+        Finalidade do `reauth_token` (SR-013.1). Pode ganhar valores em mudança aditiva. Mapeamento operação ->
+        escopo em `components.parameters.ReauthToken` e em `x-reauth-scope` de cada operação.
+      enum:
+        - ACCOUNT_PASSWORD_CHANGE
+        - ACCOUNT_EMAIL_CHANGE
+        - IDENTITY_LINK
+        - IDENTITY_UNLINK
+        - DATA_EXPORT_REQUEST
+        - DATA_EXPORT_DOWNLOAD
+        - ACCOUNT_DELETE
+        - PRIVACY_REQUEST
+        - BABY_DELETE
+        - OWNERSHIP_TRANSFER
+
     # -------------------------------------------------------------- auth
     DeviceInfo:
       type: object
+      additionalProperties: false
       required: [device_id, platform]
       properties:
         device_id:
@@ -2679,30 +2826,32 @@ components:
       required: [purpose_key, document_version]
       properties:
         purpose_key: { $ref: '#/components/schemas/PurposeKey' }
-        document_version:
-          type: string
-          examples: ['1.0.0']
+        document_version: { $ref: '#/components/schemas/DocumentVersion' }
     RegisterRequest:
       type: object
+      additionalProperties: false
       required: [email, password, locale, consents]
       properties:
-        email: { type: string, format: email, maxLength: 254 }
+        email: { $ref: '#/components/schemas/EmailAddress' }
         password:
           type: string
           format: password
           writeOnly: true
-          description: Política em D-16.
+          maxLength: 128
+          description: |
+            Política em D-16: o mínimo vem do servidor (`limits.password_min_length`, padrão 10) e o máximo é 128
+            caracteres (Argon2id sobre entrada ilimitada é vetor de DoS). Violação: `400` com
+            `errors[].code=PASSWORD_POLICY`. Senhas vazadas conhecidas podem ser recusadas (k-anonimato).
         display_name: { type: string, maxLength: 80 }
-        locale:
-          type: string
-          examples: [pt-BR]
+        locale: { $ref: '#/components/schemas/LocaleTag' }
         timezone:
-          type: string
           description: IANA.
-          examples: [America/Sao_Paulo]
+          allOf:
+            - $ref: '#/components/schemas/TimeZoneId'
         consents:
           type: array
           minItems: 2
+          maxItems: 10
           items: { $ref: '#/components/schemas/ConsentAcceptance' }
     VerificationPending:
       type: object
@@ -2714,40 +2863,47 @@ components:
         resend_after_seconds: { type: integer }
     EmailVerifyRequest:
       type: object
+      additionalProperties: false
       required: [email, code, device]
       properties:
-        email: { type: string, format: email }
-        code: { type: string, writeOnly: true }
+        email: { $ref: '#/components/schemas/EmailAddress' }
+        code: { $ref: '#/components/schemas/VerificationCode' }
         device: { $ref: '#/components/schemas/DeviceInfo' }
     LoginRequest:
       type: object
+      additionalProperties: false
       required: [email, password, device]
       properties:
-        email: { type: string, format: email }
-        password: { type: string, format: password, writeOnly: true }
+        email: { $ref: '#/components/schemas/EmailAddress' }
+        password: { type: string, format: password, writeOnly: true, minLength: 1, maxLength: 128 }
         device: { $ref: '#/components/schemas/DeviceInfo' }
     SocialLoginRequest:
       type: object
+      additionalProperties: false
       required: [id_token, nonce, device]
       properties:
-        id_token: { type: string, writeOnly: true }
+        id_token: { type: string, writeOnly: true, minLength: 16, maxLength: 4096 }
         nonce:
           type: string
+          minLength: 8
+          maxLength: 256
           description: Valor aleatório enviado ao provedor; o servidor confere o hash no token.
         device: { $ref: '#/components/schemas/DeviceInfo' }
         given_name: { type: string, maxLength: 80 }
         family_name: { type: string, maxLength: 80 }
-        locale: { type: string }
-        timezone: { type: string }
+        locale: { $ref: '#/components/schemas/LocaleTag' }
+        timezone: { $ref: '#/components/schemas/TimeZoneId' }
         consents:
           type: array
+          maxItems: 10
           description: Obrigatório se a conta ainda não existe.
           items: { $ref: '#/components/schemas/ConsentAcceptance' }
     RefreshRequest:
       type: object
+      additionalProperties: false
       required: [refresh_token, device_id]
       properties:
-        refresh_token: { type: string, writeOnly: true }
+        refresh_token: { type: string, writeOnly: true, minLength: 16, maxLength: 512 }
         device_id: { type: string, format: uuid }
     TokenResponse:
       type: object
@@ -2788,20 +2944,42 @@ components:
             created_at: '2026-10-08T17:00:00Z'
     ReauthRequest:
       type: object
-      description: Informar `password` ou (`provider`, `id_token`, `nonce`).
+      description: |
+        Informar **exatamente um** de `password` ou (`provider`, `id_token`, `nonce`). `scope` declara a(s)
+        operação(ões) sensível(is) a que o token se destina (SR-013.1); opcional na v1.x por compatibilidade
+        (obrigatório na `/v2`).
+      additionalProperties: false
       properties:
-        password: { type: string, format: password, writeOnly: true }
+        password: { type: string, format: password, writeOnly: true, minLength: 1, maxLength: 128 }
         provider: { $ref: '#/components/schemas/IdentityProvider' }
-        id_token: { type: string, writeOnly: true }
-        nonce: { type: string }
+        id_token: { type: string, writeOnly: true, minLength: 16, maxLength: 4096 }
+        nonce: { type: string, minLength: 8, maxLength: 256 }
+        scope:
+          type: array
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/ReauthScope' }
+          description: Escopos pedidos. Omitido = token de uso único para uma operação sensível qualquer (transição).
+      oneOf:
+        - required: [password]
+        - required: [provider, id_token, nonce]
     ReauthResponse:
       type: object
       required: [reauth_token, expires_in]
       properties:
-        reauth_token: { type: string }
+        reauth_token:
+          type: string
+          description: Opaco para o cliente. Vinculado a `sid`, ao `scope` e de uso único (`jti`); enviar em `X-Reauth-Token`.
         expires_in:
           type: integer
-          description: Segundos (padrão 300).
+          minimum: 1
+          maximum: 300
+          description: Segundos de validade (padrão e máximo 300).
+        scope:
+          type: array
+          description: Escopos concedidos (eco de `ReauthRequest.scope`; ausente na transição sem escopo).
+          items: { $ref: '#/components/schemas/ReauthScope' }
     User:
       type: object
       required: [id, email, email_verified, locale, status, has_password, identities, created_at]
@@ -2827,8 +3005,8 @@ components:
       type: object
       properties:
         display_name: { type: string, maxLength: 80 }
-        locale: { type: string }
-        timezone: { type: string }
+        locale: { $ref: '#/components/schemas/LocaleTag' }
+        timezone: { $ref: '#/components/schemas/TimeZoneId' }
       additionalProperties: false
     Session:
       type: object
@@ -2837,7 +3015,10 @@ components:
         id: { type: string, format: uuid }
         device_id: { type: string, format: uuid }
         device_label: { type: [string, 'null'] }
-        platform: { type: string, enum: [IOS, ANDROID] }
+        platform:
+          type: string
+          enum: [IOS, ANDROID]
+          description: O banco aceita também `WEB` (reservado, SR-021); o contrato v1 não o emite.
         app_version: { type: [string, 'null'] }
         created_at: { type: string, format: date-time }
         last_seen_at:
@@ -2846,7 +3027,10 @@ components:
           description: Precisão reduzida (aproximada).
         approx_location:
           type: [string, 'null']
-          description: Cidade/região aproximada, se disponível.
+          deprecated: true
+          description: |
+            **Depreciado (SR-015).** Reservado: no MVP o servidor **não** faz geolocalização por IP e devolve sempre
+            `null` (minimização, privacy-security-spec 1.3). A remoção do campo exige `/v2`.
         is_current: { type: boolean }
     PushTokenRegistration:
       type: object
@@ -2859,8 +3043,8 @@ components:
           enum: [PRODUCTION, SANDBOX]
           default: PRODUCTION
           description: Relevante para APNs.
-        app_version: { type: string }
-        locale: { type: string }
+        app_version: { type: string, maxLength: 32 }
+        locale: { $ref: '#/components/schemas/LocaleTag' }
         os_notifications_authorized:
           type: boolean
           description: Permissão de notificação do SO no momento.
@@ -2935,7 +3119,14 @@ components:
           description: Campo distinto e independente de `birth_date` (RB-004).
         sex:
           type: [string, 'null']
-          enum: [FEMALE, MALE, OTHER, null]
+          enum: [FEMALE, MALE, OTHER, UNSPECIFIED, null]
+          deprecated: true
+          description: |
+            **Depreciado e minimizado (SR-015).** A privacy-security-spec 1.3 manda **não coletar** o sexo do bebê: o
+            app **não deve** pedir nem enviar este campo, e o servidor devolve `null` quando nunca foi informado. O
+            campo é mantido apenas para compatibilidade da v1 (remoção exige `/v2`) e só poderia ser ativado por
+            decisão jurídica (DJ-01). `UNSPECIFIED` = não especificado; `OTHER` não existe no banco (alinhamento
+            pendente, SR-021).
         timezone:
           type: string
           description: IANA.
@@ -2983,10 +3174,13 @@ components:
         due_date: { type: [string, 'null'], format: date }
         sex:
           type: [string, 'null']
-          enum: [FEMALE, MALE, OTHER, null]
+          enum: [FEMALE, MALE, OTHER, UNSPECIFIED, null]
+          deprecated: true
+          description: '**Depreciado (SR-015): o app não deve coletar nem enviar.** Omitir. Ver `Baby.sex`.'
         timezone:
-          type: string
           description: IANA; se omitido, usa o fuso do dispositivo/usuário e o app confirma.
+          allOf:
+            - $ref: '#/components/schemas/TimeZoneId'
       additionalProperties: false
     BabyUpdate:
       type: object
@@ -2997,8 +3191,10 @@ components:
         due_date: { type: [string, 'null'], format: date }
         sex:
           type: [string, 'null']
-          enum: [FEMALE, MALE, OTHER, null]
-        timezone: { type: string }
+          enum: [FEMALE, MALE, OTHER, UNSPECIFIED, null]
+          deprecated: true
+          description: '**Depreciado (SR-015): o app não deve coletar nem enviar.** Omitir. Ver `Baby.sex`.'
+        timezone: { $ref: '#/components/schemas/TimeZoneId' }
       additionalProperties: false
 
     # --------------------------------------------------------- caregivers
@@ -3018,7 +3214,10 @@ components:
           format: email
           description: Visível apenas ao Owner.
         role: { $ref: '#/components/schemas/Role' }
-        status: { type: string, enum: [PENDING, ACTIVE, REVOKED, DECLINED, EXPIRED] }
+        status:
+          type: string
+          enum: [PENDING, ACTIVE, REVOKED, DECLINED, EXPIRED]
+          description: '`EXPIRED` é derivado de `invitation_expires_at` na camada de API; o banco não tem esse estado (SR-021).'
         invited_at: { type: string, format: date-time }
         invitation_expires_at: { type: [string, 'null'], format: date-time }
         accepted_at: { type: [string, 'null'], format: date-time }
@@ -3026,17 +3225,20 @@ components:
       type: object
       required: [email, role]
       properties:
-        email: { type: string, format: email }
+        email: { $ref: '#/components/schemas/EmailAddress' }
         role: { $ref: '#/components/schemas/InvitableRole' }
       additionalProperties: false
     InvitationToken:
       type: object
       required: [token]
+      additionalProperties: false
       properties:
         token:
           type: string
           writeOnly: true
-          description: Token do link de convite.
+          minLength: 16
+          maxLength: 512
+          description: Token do link de convite (aleatório, 128 bits ou mais, uso único).
     InvitationPreview:
       type: object
       required: [inviter_display_name, baby_label, role, expires_at]
@@ -3273,7 +3475,7 @@ components:
         sleep_type: { type: string, enum: [NAP, NIGHT] }
         start_at: { type: string, format: date-time }
         end_at: { type: [string, 'null'], format: date-time }
-        tz: { type: string }
+        tz: { $ref: '#/components/schemas/TimeZoneId' }
         method_or_place: { type: [string, 'null'], maxLength: 80 }
         notes: { type: [string, 'null'], maxLength: 500 }
         source: { type: string, enum: [TIMER, MANUAL] }
@@ -3291,7 +3493,7 @@ components:
         side: { $ref: '#/components/schemas/BreastSide' }
         start_at: { type: string, format: date-time }
         end_at: { type: string, format: date-time }
-        tz: { type: string }
+        tz: { $ref: '#/components/schemas/TimeZoneId' }
         notes: { type: [string, 'null'], maxLength: 500 }
       additionalProperties: false
     BottleFeedingData:
@@ -3304,13 +3506,13 @@ components:
           const: BOTTLE
         start_at: { type: string, format: date-time }
         end_at: { type: [string, 'null'], format: date-time }
-        volume_ml: { type: integer, minimum: 1 }
+        volume_ml: { type: integer, minimum: 1, maximum: 5000, description: 'Teto absoluto do contrato; o limite efetivo é `limits.bottle_volume_ml_max`. O banco guarda numeric(6,1); o contrato é inteiro em ml (SR-021).' }
         milk_type:
           description: Único tipo de alimentação em que `milk_type` se aplica; `null` = não informado.
           oneOf:
             - $ref: '#/components/schemas/MilkType'
             - type: 'null'
-        tz: { type: string }
+        tz: { $ref: '#/components/schemas/TimeZoneId' }
         notes: { type: [string, 'null'], maxLength: 500 }
       additionalProperties: false
     OtherFeedingData:
@@ -3325,7 +3527,7 @@ components:
           enum: [SOLID, OTHER]
         start_at: { type: string, format: date-time }
         end_at: { type: [string, 'null'], format: date-time }
-        tz: { type: string }
+        tz: { $ref: '#/components/schemas/TimeZoneId' }
         notes: { type: [string, 'null'], maxLength: 500 }
       additionalProperties: false
     PumpingData:
@@ -3335,12 +3537,12 @@ components:
       properties:
         start_at: { type: string, format: date-time }
         end_at: { type: string, format: date-time }
-        volume_ml: { type: [integer, 'null'], minimum: 1 }
+        volume_ml: { type: [integer, 'null'], minimum: 1, maximum: 5000 }
         side:
           oneOf:
             - $ref: '#/components/schemas/BreastSide'
             - type: 'null'
-        tz: { type: string }
+        tz: { $ref: '#/components/schemas/TimeZoneId' }
       additionalProperties: false
     DiaperData:
       type: object
@@ -3349,7 +3551,7 @@ components:
       properties:
         occurred_at: { type: string, format: date-time }
         diaper_type: { $ref: '#/components/schemas/DiaperType' }
-        tz: { type: string }
+        tz: { $ref: '#/components/schemas/TimeZoneId' }
         notes: { type: [string, 'null'], maxLength: 500 }
       additionalProperties: false
     WakeEventData:
@@ -3375,14 +3577,14 @@ components:
         start_at: { type: string, format: date-time }
         end_at: { type: [string, 'null'], format: date-time }
         occurred_at: { type: string, format: date-time }
-        tz: { type: string }
+        tz: { $ref: '#/components/schemas/TimeZoneId' }
         method_or_place: { type: [string, 'null'], maxLength: 80 }
         notes: { type: [string, 'null'], maxLength: 500 }
         side:
           oneOf:
             - $ref: '#/components/schemas/BreastSide'
             - type: 'null'
-        volume_ml: { type: [integer, 'null'], minimum: 1 }
+        volume_ml: { type: [integer, 'null'], minimum: 1, maximum: 5000 }
         milk_type:
           description: Só em `BOTTLE`.
           oneOf:
@@ -3422,7 +3624,11 @@ components:
         client_created_at:
           type: string
           format: date-time
-          description: Instante da ação no dispositivo (preservado).
+          description: |
+            Instante da ação no dispositivo. **Somente informativo (SR-014):** é preservado como enviado, serve a
+            auditoria, exibição e diagnóstico de relógio, e **não** decide conflitos. A ordem de resolução é do
+            servidor (`server_received_at` e `sync_sequence`). Desvio acima de `limits.sync_max_clock_skew_seconds`
+            gera `warnings[CLIENT_CLOCK_SKEW]`.
     CreateMutation:
       allOf:
         - $ref: '#/components/schemas/MutationBase'
@@ -3501,7 +3707,12 @@ components:
         related_entity_ids:
           type: array
           items: { type: string, format: uuid }
-        skew_seconds: { type: integer }
+        skew_seconds:
+          type: integer
+          description: '`client_created_at - server_received_at` em segundos (positivo = relógio do cliente adiantado). Só em `CLIENT_CLOCK_SKEW`.'
+        tolerance_seconds:
+          type: integer
+          description: 'Tolerância vigente (`limits.sync_max_clock_skew_seconds`). Só em `CLIENT_CLOCK_SKEW`.'
     MutationResult:
       type: object
       required: [mutation_id, status]
@@ -3513,6 +3724,10 @@ components:
           description: '`DUPLICATE` = já aplicada antes; devolve o estado canônico atual. `REJECTED` não altera estado.'
         entity_type: { $ref: '#/components/schemas/SyncEntityType' }
         entity_id: { type: string, format: uuid }
+        server_received_at:
+          type: string
+          format: date-time
+          description: Instante em que o servidor recebeu e ordenou a mutação (SR-014). É a base da ordem de conflito; informativo para o cliente.
         version:
           type: integer
           description: Versão canônica após a aplicação (não em `REJECTED`).
@@ -3532,7 +3747,13 @@ components:
         retryable:
           type: boolean
           description: 'Só em `REJECTED`. `false` = descartar a mutação; `true` = reenviar depois.'
-        problem: { $ref: '#/components/schemas/Problem' }
+        problem:
+          description: |
+            Presente em `REJECTED`. Códigos por mutação: `VALIDATION_FAILED`, `SLEEP_OVERLAP`, `ENTITY_DELETED`,
+            `ENTITY_NOT_FOUND` (inclui `entity_id` de outro bebê, sem revelar existência), `ENTITY_ID_UNAVAILABLE`,
+            `ENTITY_QUOTA_EXCEEDED`, `VERSION_AHEAD`, `FORBIDDEN_ROLE`, `ACCESS_REVOKED`, `BABY_NOT_FOUND`, `TRANSIENT`.
+          allOf:
+            - $ref: '#/components/schemas/Problem'
     PushResponse:
       type: object
       required: [results, server_time]
@@ -3737,7 +3958,7 @@ components:
               type: string
               format: date
               description: Inclusive.
-        tz: { type: string }
+        tz: { $ref: '#/components/schemas/TimeZoneId' }
         granularity: { type: string, enum: [HOUR, DAY] }
         generated_at: { type: string, format: date-time }
         buckets:
@@ -3804,6 +4025,7 @@ components:
           default: true
         categories:
           type: array
+          maxItems: 10
           items: { $ref: '#/components/schemas/NotificationCategoryPreference' }
     NotificationSettings:
       type: object
@@ -3880,36 +4102,47 @@ components:
                 is_caregiver: { type: boolean }
     PurchaseRequest:
       type: object
+      additionalProperties: false
       required: [store, product_id]
       properties:
         store: { type: string, enum: [APPLE, GOOGLE] }
-        product_id: { type: string }
+        product_id: { type: string, minLength: 1, maxLength: 128 }
         apple_signed_transaction:
           type: string
+          maxLength: 16384
           writeOnly: true
           description: JWS da transação (StoreKit 2). Obrigatório se `store=apple`.
         google_purchase_token:
           type: string
+          maxLength: 4096
           writeOnly: true
           description: Obrigatório se `store=google`.
     RestoreRequest:
       type: object
+      additionalProperties: false
       required: [store]
       properties:
         store: { type: string, enum: [APPLE, GOOGLE] }
         apple_signed_transactions:
           type: array
-          items: { type: string }
+          maxItems: 50
+          items: { type: string, maxLength: 16384 }
           writeOnly: true
         google_purchase_tokens:
           type: array
-          items: { type: string }
+          maxItems: 50
+          items: { type: string, maxLength: 4096 }
           writeOnly: true
 
     # ------------------------------------------------------------ privacy
     PurposeKey:
       type: string
-      description: Catálogo do privacy-security-spec 3.2. Valores futuros podem surgir; o cliente ignora desconhecidos.
+      description: |
+        Catálogo do privacy-security-spec 3.2. Valores futuros podem surgir; o cliente ignora desconhecidos. No
+        contrato trafega em **MAIÚSCULAS** (AD-27); o banco guarda a chave em minúsculas (`terms_of_use`,
+        `consent_purpose.purpose_key ~ '^[a-z][a-z0-9_]*$'`). O servidor faz a conversão bijetora `UPPER <-> lower`
+        na fronteira e rejeita valor fora do catálogo com `400 VALIDATION_FAILED` (`errors[].code=UNSUPPORTED_VALUE`)
+        (SR-021).
       enum: [TERMS_OF_USE, PRIVACY_POLICY, CHILD_DATA_GUARDIAN, ANALYTICS_PRODUCT, MARKETING_EMAIL, PUSH_NOTIFICATIONS]
     LegalDocument:
       type: object
@@ -3924,16 +4157,17 @@ components:
     ConsentInput:
       type: object
       required: [purpose_key, document_version, status, source]
+      additionalProperties: false
       properties:
         purpose_key: { $ref: '#/components/schemas/PurposeKey' }
-        document_version: { type: string }
+        document_version: { $ref: '#/components/schemas/DocumentVersion' }
         status: { type: string, enum: [GRANTED, REVOKED] }
         source: { type: string, enum: [ONBOARDING, SETTINGS, PROMPT] }
         baby_id:
           type: [string, 'null']
           format: uuid
-          description: Para consentimentos sobre dados de um bebê.
-        locale: { type: string }
+          description: Para consentimentos sobre dados de um bebê. O servidor valida o vínculo ativo do usuário com o bebê (`child_data_guardian`); sem vínculo, `404`.
+        locale: { $ref: '#/components/schemas/LocaleTag' }
     ConsentRecord:
       type: object
       required: [id, purpose_key, document_version, status, granted_at]
@@ -3961,6 +4195,7 @@ components:
           items: { $ref: '#/components/schemas/ConsentRecord' }
     DataExportRequest:
       type: object
+      additionalProperties: false
       properties:
         scope:
           type: string
@@ -3973,6 +4208,7 @@ components:
         baby_ids:
           type: array
           description: Omitido = todos os bebês de que é Owner. Ignorado com `scope=PERSONAL_ONLY`.
+          maxItems: 50
           items: { type: string, format: uuid }
         format:
           type: string
@@ -3993,6 +4229,7 @@ components:
         scope: { type: string, enum: [OWNED_DATA, PERSONAL_ONLY] }
     AccountDeletionRequest:
       type: object
+      additionalProperties: false
       required: [confirm]
       properties:
         confirm:
@@ -4009,6 +4246,7 @@ components:
         baby_decisions:
           description: Obrigatório só nas políticas `BLOCK` e `TRANSFER_OWNERSHIP` para bebês compartilhados.
           type: array
+          maxItems: 50
           items:
             type: object
             required: [baby_id, action]
@@ -4030,8 +4268,9 @@ components:
         requested_at: { type: string, format: date-time }
         grace_days:
           type: integer
-          minimum: 0
-          description: Duração da janela de arrependimento aplicada (`policies.deletion_grace_days`; padrão 7).
+          minimum: 1
+          maximum: 30
+          description: Duração da janela de arrependimento aplicada (`policies.deletion_grace_days`; padrão 7; faixa 1 a 30 igual à do banco, SR-021).
         scheduled_for:
           type: [string, 'null']
           format: date-time
@@ -4040,6 +4279,29 @@ components:
             O servidor não executa a exclusão antes deste instante; cancelável até lá. `null` = sem agendamento
             (`CANCELLED`).
         completed_at: { type: [string, 'null'], format: date-time }
+        caregivers_notification:
+          type: [object, 'null']
+          description: |
+            Notificação aos demais cuidadores (SR-016). Opcional; `null` = não se aplica (nenhum bebê compartilhado).
+            O servidor notifica por e-mail e push (categoria `SYSTEM`, não desativável) o titular e todos os cuidadores
+            ativos dos bebês afetados ao **criar** o pedido e ao **concluí-lo**.
+          properties:
+            notified_at:
+              type: [string, 'null']
+              format: date-time
+              description: Instante do último envio de aviso (criação do pedido). `null` = ainda não enviado.
+            completion_notified_at:
+              type: [string, 'null']
+              format: date-time
+              description: Instante do aviso de conclusão. `null` = ainda não concluída.
+            recipients_count:
+              type: integer
+              minimum: 0
+              description: Quantidade de cuidadores ativos avisados (sem identificá-los).
+            event_types:
+              type: array
+              description: 'Tipos de aviso emitidos (ex.: `ACCOUNT_DELETION_SCHEDULED`, `ACCOUNT_DELETION_COMPLETED`, `SHARED_BABY_DELETION_SCHEDULED`, `SHARED_BABY_DELETED`). Tolerar desconhecidos.'
+              items: { type: string }
     PrivacyRequestCreate:
       type: object
       required: [type]
@@ -4172,7 +4434,8 @@ components:
               description: Padrão `CASCADE`.
             deletion_grace_days:
               type: integer
-              minimum: 0
+              minimum: 1
+              maximum: 30
               default: 7
               examples: [7]
               description: |
@@ -4212,8 +4475,30 @@ components:
                 **Padrão inicial 240**, customizável em banco.
             bottle_volume_ml_max: { type: integer }
             pumping_volume_ml_max: { type: integer }
-            notes_max_length: { type: integer }
+            notes_max_length: { type: integer, description: 'Contrato: 500 (o banco admite 2000; vale o menor, SR-021).' }
             sync_max_mutations_per_push: { type: integer }
+            sync_max_payload_bytes:
+              type: integer
+              examples: [262144]
+              description: Tamanho máximo do corpo de `POST /sync/push` em bytes (`413` acima). Opcional; ausente = 262144.
+            sync_max_events_per_baby_per_day:
+              type: integer
+              minimum: 1
+              description: Cota diária de mutações aplicadas por bebê (`429 QUOTA_EXCEEDED` acima). Opcional; ausente = valor interno não publicado.
+            sync_max_entities_per_baby:
+              type: integer
+              minimum: 1
+              description: Teto de entidades vivas por bebê (`CREATE` acima sai `REJECTED ENTITY_QUOTA_EXCEEDED`). Opcional.
+            sync_max_clock_skew_seconds:
+              type: integer
+              minimum: 0
+              examples: [86400]
+              description: Tolerância de desvio entre `client_created_at` e o relógio do servidor; acima disso a mutação é aplicada com `warnings[CLIENT_CLOCK_SKEW]`. Opcional; ausente = 86400.
+            password_min_length: { type: integer, examples: [10], description: 'Mínimo de caracteres de senha nova (D-16). Opcional.' }
+            password_max_length: { type: integer, examples: [128], description: 'Máximo de caracteres de senha (128). Opcional.' }
+            reauth_token_ttl_seconds: { type: integer, maximum: 300, examples: [300], description: 'Validade do `reauth_token` (máximo 300). Opcional.' }
+            invitations_max_per_owner_per_day: { type: integer, minimum: 1, description: 'Limite diário de convites por Owner (`429` acima). Opcional.' }
+            data_exports_max_per_day: { type: integer, minimum: 1, description: 'Limite diário de pedidos de exportação por usuário (`429` acima). Opcional.' }
             sync_tombstone_retention_days:
               type: integer
               examples: [90]

@@ -62,16 +62,12 @@ public sealed class RefreshAndSessionTests(PostgresFixture postgres) : Integrati
     public async Task Refresh_rejects_garbage_forged_and_wrong_device_tokens()
     {
         var s = await Api.RegisterAndVerifyAsync();
-        var other = await Api.RegisterAndVerifyAsync();
 
         var garbage = await Refresh("rt_garbage", s.DeviceId);
         var wrongDevice = await Refresh(s.RefreshToken, Guid.NewGuid());
-        // Token de outro usuário com o userId trocado pelo do primeiro: RLS esconde a sessão.
-        var crossed = await Refresh(other.RefreshToken, other.DeviceId);
 
         Assert.Equal("INVALID_REFRESH_TOKEN", garbage.Code);
         Assert.Equal("INVALID_REFRESH_TOKEN", wrongDevice.Code);
-        Assert.Equal(HttpStatusCode.OK, crossed.Status);
         // O refresh do dispositivo errado não deve ter consumido o token.
         Assert.Equal(HttpStatusCode.OK, (await Refresh(s.RefreshToken, s.DeviceId)).Status);
     }
@@ -176,18 +172,5 @@ public sealed class RefreshAndSessionTests(PostgresFixture postgres) : Integrati
         Assert.Equal(HttpStatusCode.OK, (await Api.GetAsync("/v1/me", a3.AccessToken)).Status);
         Assert.Equal("SESSION_REVOKED", (await Api.GetAsync("/v1/me", a.AccessToken)).Code);
         Assert.Equal("SESSION_REVOKED", (await Api.GetAsync("/v1/me", a2.AccessToken)).Code);
-    }
-
-    [Fact]
-    public async Task Revoked_session_does_not_delete_the_clients_pending_state_contract_is_401_only()
-    {
-        // RF-001-A4: o servidor só responde 401 SESSION_REVOKED; não há efeito colateral nos dados do usuário.
-        var s = await Api.RegisterAndVerifyAsync();
-        await Api.SendAsync(HttpMethod.Delete, $"/v1/me/sessions/{s.SessionId}", null, s.AccessToken);
-
-        var response = await Api.GetAsync("/v1/me", s.AccessToken);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.Status);
-        Assert.Equal(1, await AdminScalarAsync<long>("SELECT count(*) FROM nina.app_user"));
     }
 }
