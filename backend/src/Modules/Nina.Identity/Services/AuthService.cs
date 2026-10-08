@@ -26,6 +26,7 @@ public sealed partial class AuthService(
     IIdentityMailer mailer,
     IRateLimiter limiter,
     SecretKeys keys,
+    ServerMac mac,
     AuditLog audit,
     IRequestContext request,
     IBackgroundWork background,
@@ -128,27 +129,30 @@ public sealed partial class AuthService(
             // A RLS (SR-003) só deixa o usuário inserir a própria linha: o contexto vem antes do INSERT.
             userId = Guid.NewGuid();
             await tx.SetUserAsync(userId);
-            await IdentityStore.InsertUserAsync(tx, userId, email, locale, timezone, null, now, req.DisplayName);
-        }
-        else
-        {
-            // Cadastro ainda não confirmado: respeita o intervalo de reenvio e substitui a senha (anti pré-sequestro).
-            userId = existing.Id;
-            await tx.SetUserAsync(userId);
-            var last = await IdentityStore.LastRecoveryCreatedAsync(tx, userId);
-            if (last is { } l && now - l < TimeSpan.FromSeconds(Opt.ResendAfterSeconds))
+            await IdentityStore.InsertUserAsync(tx, userId, email, locale, timezone, now, req.DisplayName);
+            await IdentityStore.UpsertCredentialAsync(tx, userId, hash, now);
+            if (!await IssueVerificationCodeAsync(tx, userId, code, now))
             {
                 return RegisterOutcome.None;
             }
+
+            await consents.RecordOnboardingAsync(tx, userId, accepted, locale, null);
+            await audit.AppendAsync(tx, new AuditEntry("auth.register", userId, "user", userId));
+            return RegisterOutcome.SendCode;
         }
 
-        await IdentityStore.UpsertCredentialAsync(tx, userId, hash, now);
-        await IdentityStore.InvalidateOpenRecoveryAsync(tx, userId, now);
-        await IdentityStore.InsertRecoveryAsync(tx, userId, VerificationHash(userId, code), now, now.AddMinutes(Opt.VerificationCodeMinutes));
-        await consents.RecordOnboardingAsync(tx, userId, accepted, locale, null);
-        await audit.AppendAsync(tx, new AuditEntry("auth.register", userId, "user", userId));
-        return RegisterOutcome.SendCode;
+        // NR-08: cadastro de e-mail AINDA NÃO verificado. Quem se cadastra depois NÃO substitui a credencial (nem os consentimentos)
+        // da conta existente: o pedido é ignorado em silêncio (resposta 202 uniforme) e só se reenvia um código novo ao dono da caixa
+        // postal, respeitando o intervalo de reenvio. A senha só muda por recuperação (token no e-mail) ou troca autenticada.
+        userId = existing.Id;
+        await tx.SetUserAsync(userId);
+        return await IssueVerificationCodeAsync(tx, userId, code, now) ? RegisterOutcome.SendCode : RegisterOutcome.None;
     }
+
+    /// <summary>Emite o código de verificação por <c>nina.email_code_issue</c> (assinado pelo servidor; respeita o intervalo de reenvio).</summary>
+    private Task<bool> IssueVerificationCodeAsync(DbTx tx, Guid userId, string code, DateTimeOffset now) =>
+        IdentityStore.IssueEmailCodeAsync(
+            tx, mac, userId, VerificationHash(userId, code), now, now.AddMinutes(Opt.VerificationCodeMinutes), TimeSpan.FromSeconds(Opt.ResendAfterSeconds));
 
     public async Task<TokenResponse> VerifyEmailAsync(EmailVerifyRequest req, CancellationToken ct)
     {
@@ -172,20 +176,15 @@ public sealed partial class AuthService(
                 return null;
             }
 
-            var owner = await IdentityStore.ConsumeRecoveryAsync(tx, VerificationHash(user.Id, code!), now);
+            // NR-09: a conferência, o contador de tentativas (persistente e atômico; esgotado, o código é invalidado e será preciso
+            // pedir outro, AD-34) e a marca de e-mail verificado são UMA função do banco (nina.email_code_verify).
+            var owner = await IdentityStore.VerifyEmailCodeAsync(tx, email!, VerificationHash(user.Id, code!), now);
             if (owner != user.Id)
             {
-                if (attempt.Count >= Opt.VerificationCodeAttempts)
-                {
-                    // Tentativas esgotadas: o código vigente é invalidado e será preciso pedir outro (AD-34).
-                    await IdentityStore.InvalidateOpenRecoveryAsync(tx, user.Id, now);
-                }
-
                 return null;
             }
 
             await tx.SetUserAsync(user.Id);
-            await IdentityStore.MarkEmailVerifiedAsync(tx, user.Id, now);
             var verified = user with { EmailVerifiedAt = now };
             return await issuer.IssueAsync(tx, verified, device!, "auth.email_verified", "EMAIL_CODE");
         }, ct);
@@ -333,8 +332,7 @@ public sealed partial class AuthService(
             var userId = Guid.NewGuid();
             var effectiveLocale = locale ?? Opt.DefaultLocale;
             await tx.SetUserAsync(userId);
-            await IdentityStore.InsertUserAsync(tx, userId, email, effectiveLocale, timezone, now, now);
-            await IdentityStore.InsertIdentityAsync(tx, userId, provider, identity.Subject, email, now);
+            await IdentityStore.RegisterSocialUserAsync(tx, mac, userId, email, null, effectiveLocale, timezone, provider, identity.Subject, now);
             await consents.RecordOnboardingAsync(tx, userId, accepted, effectiveLocale, device);
             await audit.AppendAsync(tx, new AuditEntry("auth.register", userId, "user", userId, device.DeviceId, Metadata: new Dictionary<string, object?> { ["method"] = provider }));
             var created = await IdentityStore.FindUserByIdAsync(tx, userId);
@@ -534,7 +532,6 @@ public sealed partial class AuthService(
             }
 
             await IdentityStore.UpsertCredentialAsync(tx, userId.Value, hash, now);
-            await IdentityStore.MarkEmailVerifiedAsync(tx, userId.Value, now);
             await IdentityStore.InvalidateOpenRecoveryAsync(tx, userId.Value, now);
             var devices = await IdentityStore.RevokeAllSessionsAsync(tx, userId.Value, null, "PASSWORD_CHANGED", now);
             await IdentityStore.DeletePushTokensAsync(tx, userId.Value, devices);
@@ -622,9 +619,18 @@ public sealed partial class AuthService(
 
         limiter.Reset(key);
         var (token, expiresIn, jti) = tokens.IssueReauthToken(userId, sessionId, scopes);
-        await db.InTransactionAsync(userId, tx => audit.AppendAsync(tx, new AuditEntry(
-            "auth.reauthenticated", userId, "session", sessionId,
-            Metadata: new Dictionary<string, object?> { ["jti"] = jti, ["scopes"] = scopes ?? [] })), ct);
+        var issuedAt = time.GetUtcNow();
+
+        // NR-03: o jti nasce no livro-razão do banco, assinado pelo servidor, junto com usuário, sessão, escopos e validade; sem esta
+        // linha o jti não vale para nada (consume_reauth_jti/reauth_bind só aceitam jti emitido).
+        await db.InTransactionAsync(userId, async tx =>
+        {
+            await IdentityStore.IssueReauthAsync(
+                tx, mac, userId, keys.Hmac("reauth-jti", jti), sessionId, scopes ?? [], issuedAt, issuedAt.AddSeconds(expiresIn));
+            await audit.AppendAsync(tx, new AuditEntry(
+                "auth.reauthenticated", userId, "session", sessionId,
+                Metadata: new Dictionary<string, object?> { ["jti"] = jti, ["scopes"] = scopes ?? [] }));
+        }, ct);
         return new ReauthResponse(token, expiresIn, scopes?.ToList());
     }
 

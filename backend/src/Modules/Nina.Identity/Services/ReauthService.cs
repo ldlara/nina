@@ -26,7 +26,7 @@ public sealed class ReauthService(TokenService tokens, NinaDb db, SecretKeys key
         var hash = keys.Hmac("reauth-jti", claims.Jti);
         var consumed = await db.InTransactionAsync(userId, async tx =>
         {
-            if (!await IdentityStore.TryConsumeReauthJtiAsync(tx, hash, requiredScope, sessionId, claims.ExpiresAt.AddMinutes(1)))
+            if (!await IdentityStore.TryConsumeReauthJtiAsync(tx, hash, requiredScope, sessionId))
             {
                 return false;
             }
