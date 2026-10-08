@@ -150,7 +150,7 @@ public sealed class ApiClient(HttpClient http, ApiFactory factory)
             ["timezone"] = "America/Sao_Paulo",
             ["consents"] = Consents(),
         });
-        Assert.Equal(System.Net.HttpStatusCode.Accepted, register.Status);
+        Assert.True(System.Net.HttpStatusCode.Accepted == register.Status, register.Json?.ToJsonString());
         var session = await VerifyAsync(email, LastCode(email), deviceId, platform);
         return session with { Email = email, Password = password };
     }

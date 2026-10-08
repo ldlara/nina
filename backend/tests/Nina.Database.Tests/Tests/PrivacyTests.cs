@@ -211,7 +211,8 @@ public sealed class PrivacyTests(PgCluster cluster) : DbTestBase(cluster)
         }
         else
         {
-            id = await OwnerScalarAsync<Guid>($"INSERT INTO nina.account_deletion_request (user_id, grace_days, scheduled_for) VALUES ('{user}', 1, now()) RETURNING id");
+            id = Guid.NewGuid();
+            await OwnerAsync($"INSERT INTO nina.account_deletion_request (id, user_id, grace_days, scheduled_for) VALUES ('{id}', '{user}', 1, now())");
         }
 
         if (elapsed)

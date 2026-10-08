@@ -421,7 +421,8 @@ public sealed class IdentityTablesTests(PgCluster cluster) : DbTestBase(cluster)
     {
         // pelo app o pedido nasce sempre confirmado (NR-03/NR-14): sem reautenticacao nao ha pedido
         Assert.Equal("NN014", await FailsAsync(Role.App, W.Alice, "SELECT nina.request_account_deletion(NULL)"));
-        var request = await OwnerScalarAsync<Guid>($"INSERT INTO nina.account_deletion_request (user_id, grace_days, scheduled_for) VALUES ('{W.Alice}', 1, now()) RETURNING id");
+        var request = Guid.NewGuid();
+        await OwnerAsync($"INSERT INTO nina.account_deletion_request (id, user_id, grace_days, scheduled_for) VALUES ('{request}', '{W.Alice}', 1, now())");
 
         Assert.Null(await OwnerScalarAsync<DateTime?>($"SELECT confirmed_at FROM nina.account_deletion_request WHERE id = '{request}'"));
         var jti = await ReauthAsync(W.Alice, "ACCOUNT_DELETE");
