@@ -23,7 +23,7 @@ public sealed class SleepPolicyTests(PostgresFixture postgres) : TrackingTestBas
         Assert.Equal("APPLIED", overlap.Status());
         Assert.Equal("KEPT_BOTH", overlap.Resolution());
         Assert.Equal(["SLEEP_OVERLAP"], overlap.WarningCodes());
-        Assert.Equal(a.ToString(), overlap["warnings"]![0]!["related_entity_ids"]![0]!.GetValue<string>());
+        Assert.Equal(a.ToString(), overlap!["warnings"]![0]!["related_entity_ids"]![0]!.GetValue<string>());
         Assert.NotNull(overlap.Entity());
         Assert.Equal(3L, await AdminScalarAsync<long>($"SELECT count(*) FROM nina.sleep_session WHERE baby_id = '{baby}'"));
     }
@@ -54,7 +54,7 @@ public sealed class SleepPolicyTests(PostgresFixture postgres) : TrackingTestBas
         Assert.Equal("APPLIED", second.Status());
         Assert.Equal("KEPT_BOTH", second.Resolution());
         Assert.Equal(["OPEN_SLEEP_EXISTS"], second.WarningCodes());
-        Assert.Equal(first.ToString(), second["warnings"]![0]!["related_entity_ids"]![0]!.GetValue<string>());
+        Assert.Equal(first.ToString(), second!["warnings"]![0]!["related_entity_ids"]![0]!.GetValue<string>());
         Assert.Equal(2L, await AdminScalarAsync<long>($"SELECT count(*) FROM nina.sleep_session WHERE baby_id = '{baby}' AND end_at IS NULL"));
     }
 
@@ -89,7 +89,7 @@ public sealed class SleepPolicyTests(PostgresFixture postgres) : TrackingTestBas
         var result = (await PushOkAsync(ana, Mut.Create(Mut.Diaper, bia, id, Mut.DiaperData(T0, notes: "a"), clientAt: skewed)))[0];
         Assert.Equal("APPLIED", result.Status());
         Assert.Equal(["CLIENT_CLOCK_SKEW"], result.WarningCodes());
-        var warning = result["warnings"]![0]!;
+        var warning = result!["warnings"]![0]!;
         Assert.InRange(warning["skew_seconds"]!.GetValue<long>(), 3 * 86400 - 60, 3 * 86400 + 60);
         Assert.Equal(86400, warning["tolerance_seconds"]!.GetValue<int>());
         Assert.Equal(skewed.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss"), (await AdminScalarAsync<DateTime>($"SELECT client_created_at FROM nina.sync_mutation WHERE entity_id = '{id}'")).ToString("yyyy-MM-dd HH:mm:ss"));
