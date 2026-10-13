@@ -150,7 +150,11 @@ public sealed class PushBasicsTests(PostgresFixture postgres) : TrackingTestBase
             Mut.Create(Mut.Diaper, baby, Guid.NewGuid(), Mut.DiaperData(T0, notes: new string('n', 500))),
             Mut.Create(Mut.Sleep, baby, Guid.NewGuid(), new JsonObject
             {
-                ["sleep_type"] = "NAP", ["start_at"] = Mut.At(T0), ["tz"] = Mut.Tz, ["source"] = "MANUAL", ["method_or_place"] = new string('m', 81),
+                ["sleep_type"] = "NAP",
+                ["start_at"] = Mut.At(T0),
+                ["tz"] = Mut.Tz,
+                ["source"] = "MANUAL",
+                ["method_or_place"] = new string('m', 81),
             }));
         Assert.Equal(["REJECTED", "APPLIED", "REJECTED"], results.Select(r => r.Status()).ToArray());
         Assert.Equal("data.notes", results[0]!["problem"]!["errors"]![0]!["field"]!.GetValue<string>());
