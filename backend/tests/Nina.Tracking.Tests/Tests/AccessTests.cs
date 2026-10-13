@@ -143,7 +143,8 @@ public sealed class AccessTests(PostgresFixture postgres) : TrackingTestBase(pos
         var w = await BuildAsync();
         foreach (var path in new[] { $"/v1/babies/{w.Baby}/timeline", $"/v1/babies/{w.Baby}/events/{w.Diaper}", $"/v1/babies/{w.Baby}/aggregates?period=DAY", $"/v1/sync/pull?baby_id={w.Baby}" })
         {
-            Assert.Equal(HttpStatusCode.OK, (await Api.GetAsync(path, w.Rita.AccessToken)).Status);
+            var read = await Api.GetAsync(path, w.Rita.AccessToken);
+            Assert.True(read.Status == HttpStatusCode.OK, $"{path} -> {read.Status} {read.Json}");
         }
 
         var history = await Api.GetAsync($"/v1/babies/{w.Baby}/events/{w.Diaper}/history", w.Rita.AccessToken);

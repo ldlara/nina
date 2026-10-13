@@ -305,6 +305,41 @@ internal sealed class FamilyValidation
         return value;
     }
 
+    // Validação linear (sem regex) para evitar DoS por backtracking: local@dominio com ao menos um ponto,
+    // sem espaços, sem segundo '@' e sem rótulos vazios.
+    private static bool IsValidEmailShape(string value)
+    {
+        var at = value.IndexOf('@');
+        if (at <= 0 || at != value.LastIndexOf('@') || at == value.Length - 1)
+        {
+            return false;
+        }
+
+        foreach (var c in value)
+        {
+            if (char.IsWhiteSpace(c))
+            {
+                return false;
+            }
+        }
+
+        var labels = value[(at + 1)..].Split('.');
+        if (labels.Length < 2)
+        {
+            return false;
+        }
+
+        foreach (var label in labels)
+        {
+            if (label.Length == 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     public string? Email(string field, string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -314,7 +349,7 @@ internal sealed class FamilyValidation
         }
 
         var normalized = value.Trim().ToLowerInvariant();
-        if (normalized.Length > 254 || !System.Text.RegularExpressions.Regex.IsMatch(normalized, @"^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$"))
+        if (normalized.Length > 254 || !IsValidEmailShape(normalized))
         {
             _errors.Add(new FieldError(field, "INVALID_FORMAT"));
             return null;

@@ -139,6 +139,7 @@ public abstract class TrackingTestBase(PostgresFixture postgres) : IAsyncLifetim
     /// <summary>Altera um parâmetro de configuração como o dono (a trilha <c>config_change</c> é gravada pelo gatilho).</summary>
     protected Task SetParameterAsync(string key, string jsonValue, string type) =>
         AdminExecAsync(
+            "SELECT set_config('nina.user_id', gen_random_uuid()::text, true); " +
             "INSERT INTO nina.app_parameter (param_key, value, value_type, description) VALUES (@k, @v::jsonb, @t, 'teste') " +
             "ON CONFLICT (param_key) DO UPDATE SET value = EXCLUDED.value",
             new NpgsqlParameter("k", key), new NpgsqlParameter("v", jsonValue), new NpgsqlParameter("t", type));

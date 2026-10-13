@@ -112,7 +112,7 @@ internal sealed class TrackingTx : IAsyncDisposable
         var cmd = new NpgsqlCommand(sql, _connection, _transaction);
         foreach (var p in parameters)
         {
-            cmd.Parameters.Add(p);
+            cmd.Parameters.Add(p.Clone());
         }
 
         return cmd;
