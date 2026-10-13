@@ -38,6 +38,5 @@ class MutationWireTest {
         assertTrue("source" in MutationWire.createData(sleep).keys)
         val patch = MutationWire.patchData(sleep, sleep.copy(endAt = 1_791_461_400_000, notes = "n"))
         assertEquals(setOf("end_at", "notes"), patch.keys)
-        assertEquals("\"2026-10-08T12:10:00Z\"".length > 0, true)
     }
 }
