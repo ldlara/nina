@@ -99,7 +99,7 @@ public sealed class PullTests(PostgresFixture postgres) : TrackingTestBase(postg
         var babyEntity = changes.Single(c => c.EntityType() == "BABY")["entity"]!;
         Assert.Equal("READ_ONLY", babyEntity["my_role"]!.GetValue<string>());
         Assert.Equal(baby.ToString(), babyEntity["id"]!.GetValue<string>());
-        Assert.Equal(90, babyEntity["age_calculation"]!["chronological_days"]!.GetValue<int>() + 0 - 10);          // 100 dias de vida, 10 a menos que o termo
+        Assert.Equal(100, babyEntity["age_calculation"]!["chronological_days"]!.GetValue<int>());          // 100 dias de vida; termo 10 dias depois
         Assert.True(babyEntity["age_calculation"]!["correction_applied"]!.GetValue<bool>());
     }
 
