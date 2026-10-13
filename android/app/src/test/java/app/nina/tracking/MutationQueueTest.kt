@@ -32,7 +32,7 @@ import java.time.Instant
 
 /** Prova da fila de mutações (RF-046-A3..A5, ADR-0003): idempotência por UUID, ordem, retry e recuperação. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], application = android.app.Application::class)
 class MutationQueueTest {
     private lateinit var env: TrackingEnv
     private val now get() = env.clock.now
