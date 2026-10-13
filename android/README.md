@@ -95,3 +95,15 @@ teste manual com TalkBack (ux-spec §10.2) ainda pendentes.
 - Provedores Google/Apple reais; deep link de convite (hoje o convidado cola código/link); recuperação de senha (RF-002)
   e sessões/dispositivos (RF-054) não têm tela; escolha de fuso do bebê (usa o do aparelho); foto do bebê.
 - Reenvio do código de e-mail repete `POST /auth/register` (o contrato v1 não tem endpoint de reenvio).
+
+## Tracking offline-first (AND-002)
+- Room v2 (`tracking_event`, `sync_mutation`; migração 1->2 testada; esquemas em `app/schemas`). Escrita = registro local + mutação
+  na mesma transação (UUID `mutation_id`, `client_created_at`, `base_version`, `device_id`; exclusão = tombstone local + `DELETE`).
+- Fila (`MutationQueue`): FIFO estrito, lote <= 100, retry com backoff, recusa definitiva marca o registro `FAILED`,
+  `releaseInFlight` após reinício. `SyncEngine` tem só o `StubSyncEngine` (motor de rede = Onda 5); `MutationWire` monta o JSON do `/sync/push`.
+- Telas: Hoje (timer, "Foi antes…", ações rápidas), Linha do tempo (dia, filtros, estados vazio/erro/offline/sincronizando),
+  formulários de sono/mamada/mamadeira/pumping/fralda, edição/exclusão com confirmação, despertares (`WakeEvent`).
+- Testes: 154 JVM (Robolectric + Room em memória para fila/repositório/migração).
+- Não validado: emulador, Compose instrumentado, TalkBack manual, contraste. Desvios: limites de volume locais (500 ml, D-22),
+  sem timer de mamada (end_at obrigatório), sem desfazer de exclusão, logout voluntário limpa também a fila, sono que cruza o dia é
+  atribuído ao dia do início na lista (totais recortam pela janela).
