@@ -18,7 +18,7 @@ public static class Mut
     public static JsonObject Push(Guid device, params JsonObject[] mutations) => new()
     {
         ["device_id"] = device.ToString(),
-        ["mutations"] = new JsonArray(mutations.Select(m => (JsonNode)m).ToArray()),
+        ["mutations"] = new JsonArray(mutations.Select(m => m.DeepClone()).ToArray()),
     };
 
     public static string PullPath(Guid baby, string? cursor, int? limit)
