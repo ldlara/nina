@@ -24,7 +24,7 @@ public sealed class IdempotencyTests(PostgresFixture postgres) : TrackingTestBas
         Assert.Equal("NONE", retry.Resolution());
         Assert.Equal(id.ToString(), retry.Entity()!["id"]!.GetValue<string>());          // estado canônico: o cliente reconcilia sem novo pull
         Assert.Equal("nota", retry.Entity()!["notes"]!.GetValue<string>());
-        Assert.Equal(first["server_received_at"]!.GetValue<string>(), retry["server_received_at"]!.GetValue<string>());
+        Assert.Equal(first!["server_received_at"]!.GetValue<string>(), retry!["server_received_at"]!.GetValue<string>());
         Assert.Equal(logBefore, await AdminScalarAsync<long>($"SELECT count(*) FROM nina.change_log WHERE baby_id = '{baby}'"));
         Assert.Equal(headBefore, await AdminScalarAsync<long>($"SELECT last_sequence FROM nina.baby_sync_head WHERE baby_id = '{baby}'"));
         Assert.Equal(1L, await AdminScalarAsync<long>($"SELECT count(*) FROM nina.diaper_event WHERE baby_id = '{baby}'"));
@@ -66,7 +66,7 @@ public sealed class IdempotencyTests(PostgresFixture postgres) : TrackingTestBas
         Assert.Equal("DUPLICATE", retry.Status());
         Assert.Equal("KEPT_BOTH", retry.Resolution());
         Assert.Equal(["SLEEP_OVERLAP"], retry.WarningCodes());
-        Assert.Equal(a.ToString(), retry["warnings"]![0]!["related_entity_ids"]![0]!.GetValue<string>());
+        Assert.Equal(a.ToString(), retry!["warnings"]![0]!["related_entity_ids"]![0]!.GetValue<string>());
     }
 
     [Fact]
