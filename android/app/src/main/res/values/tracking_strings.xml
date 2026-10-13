@@ -1,0 +1,247 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Abas -->
+    <string name="tab_today">Hoje</string>
+    <string name="tab_timeline">Linha do tempo</string>
+    <string name="babies_open_tracking">Registros</string>
+
+    <!-- Hoje -->
+    <string name="today_title">Hoje · %1$s</string>
+    <string name="today_now_label">Agora</string>
+    <string name="today_awake_for">Tempo acordado: %1$s</string>
+    <string name="today_awake_unknown">Acordado</string>
+    <string name="today_last_sleep">Último sono: %1$s – %2$s</string>
+    <string name="today_sleeping_for">Dormindo há %1$s</string>
+    <string name="today_sleeping_since">Desde %1$s · %2$s</string>
+    <string name="today_in_progress">Sono em andamento</string>
+    <string name="today_summary_title">Hoje</string>
+    <string name="today_summary_sleep">Sono %1$s</string>
+    <string name="today_summary_naps">Sonecas: %1$d</string>
+    <string name="today_summary_feedings">Mamadas: %1$d</string>
+    <string name="today_summary_diapers">Fraldas: %1$d</string>
+    <string name="today_summary_pumpings">Extrações: %1$d</string>
+    <string name="today_last_feeding">Última mamada há %1$s</string>
+    <string name="today_empty_title">Vamos começar?</string>
+    <string name="today_empty_body">Registre o último sono ou mamada de %1$s.</string>
+    <string name="today_read_only">Você tem acesso somente de leitura a este bebê.</string>
+    <string name="today_baby_missing">Não encontramos este bebê neste aparelho.</string>
+
+    <!-- Ações -->
+    <string name="action_sleep_start">Dormiu</string>
+    <string name="action_sleep_stop">Acordou</string>
+    <string name="action_sleep_earlier">Foi antes…</string>
+    <string name="action_register_other">Registrar outro</string>
+    <string name="action_cancel_recording">Cancelar registro</string>
+    <string name="sleep_earlier_title">Quando começou?</string>
+    <string name="sleep_earlier_option">Há %1$d min</string>
+    <string name="sleep_earlier_other">Escolher outro horário</string>
+    <string name="sleep_started_before">Início: foi antes?</string>
+    <string name="chip_minus_minutes">−%1$d min</string>
+    <string name="chip_minus_minutes_start_a11y">Mover o início %1$d minutos para mais cedo</string>
+    <string name="chip_minus_minutes_end_a11y">Mover o fim %1$d minutos para mais cedo</string>
+    <string name="chip_minutes_ago">Há %1$d min</string>
+    <string name="sleep_type_nap">Soneca</string>
+    <string name="sleep_type_night">Noturno</string>
+    <string name="sleep_type_unknown">Sono</string>
+    <string name="cancel_sleep_title">Cancelar este registro de sono?</string>
+    <string name="cancel_sleep_body">O sono em andamento será descartado.</string>
+    <string name="cancel_sleep_confirm">Descartar</string>
+    <string name="cancel_sleep_keep">Continuar</string>
+    <string name="stopped_title">Sono registrado</string>
+    <string name="stopped_summary">%1$s – %2$s · %3$s</string>
+    <string name="stopped_adjust_end">Ajustar fim</string>
+    <string name="stopped_details">Detalhes (local, observação)</string>
+    <string name="stopped_edit_times">Editar horários</string>
+    <string name="stopped_save">Salvar</string>
+    <string name="stopped_undo">Desfazer</string>
+    <string name="long_sleep_prompt">O bebê ainda está dormindo?</string>
+    <string name="long_sleep_yes">Ainda dorme</string>
+    <string name="long_sleep_no">Já acordou</string>
+
+    <!-- Ações rápidas -->
+    <string name="quick_title">O que você quer registrar?</string>
+    <string name="quick_close">Fechar</string>
+    <string name="quick_sleep">Sono</string>
+    <string name="quick_breast">Mamada</string>
+    <string name="quick_bottle">Mamadeira</string>
+    <string name="quick_diaper">Fralda</string>
+    <string name="quick_pumping">Extração</string>
+    <string name="quick_diaper_hint">Fralda: toque no tipo para salvar</string>
+
+    <!-- Mensagens -->
+    <string name="msg_undo">Desfazer</string>
+    <string name="msg_diaper_saved">Fralda registrada</string>
+    <string name="msg_sleep_started">Sono iniciado</string>
+    <string name="msg_open_sleep_exists">Já existe um sono em andamento. Finalize-o antes de iniciar outro.</string>
+    <string name="msg_read_only">Seu acesso a este bebê é somente de leitura.</string>
+    <string name="msg_sync_unavailable">A sincronização com o servidor ainda não está disponível nesta versão. Seus registros ficam salvos neste aparelho.</string>
+    <string name="msg_sync_offline">Sem conexão. Seus registros ficam salvos neste aparelho.</string>
+    <string name="msg_save_failed">Não foi possível salvar. Tente novamente.</string>
+    <string name="msg_not_found">Este registro não existe mais.</string>
+    <string name="msg_type_mismatch">Este tipo de registro não pode ser trocado. Exclua e crie outro.</string>
+
+    <!-- Indicador de sincronização -->
+    <string name="sync_synced">Tudo sincronizado</string>
+    <string name="sync_syncing">Sincronizando…</string>
+    <plurals name="sync_pending">
+        <item quantity="one">%1$d registro aguardando envio</item>
+        <item quantity="other">%1$d registros aguardando envio</item>
+    </plurals>
+    <string name="sync_offline">Sem conexão. Seus registros ficam salvos neste aparelho.</string>
+    <string name="sync_offline_pending">Sem conexão · %1$d aguardando envio</string>
+    <string name="sync_error">Não conseguimos sincronizar desde %1$s. Seus dados estão seguros neste aparelho.</string>
+    <plurals name="sync_rejected">
+        <item quantity="one">%1$d registro não pôde ser enviado</item>
+        <item quantity="other">%1$d registros não puderam ser enviados</item>
+    </plurals>
+    <string name="sync_try_now">Tentar agora</string>
+    <string name="item_pending_marker">Aguardando envio</string>
+    <string name="item_failed_marker">Não enviado</string>
+
+    <!-- Linha do tempo -->
+    <string name="timeline_title">Linha do tempo</string>
+    <string name="filter_all">Tudo</string>
+    <string name="filter_sleep">Sono</string>
+    <string name="filter_feeding">Comida</string>
+    <string name="filter_diaper">Fralda</string>
+    <string name="filter_pumping">Extração</string>
+    <string name="filter_group">Filtrar por tipo</string>
+    <string name="timeline_today">Hoje</string>
+    <string name="timeline_in_progress">Em andamento</string>
+    <string name="timeline_day_empty">Nenhum registro neste dia.</string>
+    <string name="timeline_add">Adicionar registro</string>
+    <string name="timeline_empty_title">Nenhum registro ainda</string>
+    <string name="timeline_empty_body">Sono, mamadas e fraldas aparecem aqui, do mais recente ao mais antigo.</string>
+    <string name="timeline_filter_empty">Nenhum registro deste tipo.</string>
+    <string name="timeline_error">Não foi possível ler os registros deste aparelho.</string>
+    <string name="timeline_load_more">Mostrar registros mais antigos</string>
+    <string name="timeline_zone_note">Horários no fuso do bebê (%1$s)</string>
+    <string name="day_totals">Sono %1$s · Mamadas %2$d · Fraldas %3$d</string>
+    <string name="day_header_a11y">%1$s. %2$s</string>
+
+    <!-- Registros (linhas) -->
+    <string name="ev_sleep_nap">Soneca</string>
+    <string name="ev_sleep_night">Sono noturno</string>
+    <string name="ev_sleep">Sono</string>
+    <string name="ev_breast">Mamada</string>
+    <string name="ev_bottle">Mamadeira</string>
+    <string name="ev_feeding_other">Alimentação</string>
+    <string name="ev_pumping">Extração</string>
+    <string name="ev_diaper">Fralda</string>
+    <string name="ev_in_progress_suffix">em andamento</string>
+    <string name="ev_edited_by">editado por %1$s</string>
+    <string name="ev_range">%1$s – %2$s</string>
+    <string name="ev_title_detail">%1$s · %2$s</string>
+    <string name="a11y_range">das %1$s às %2$s</string>
+    <string name="a11y_at">às %1$s</string>
+    <string name="a11y_since">desde %1$s</string>
+    <string name="a11y_edit_hint">Toque para editar</string>
+
+    <string name="side_left">Esquerdo</string>
+    <string name="side_right">Direito</string>
+    <string name="side_both">Ambos</string>
+    <string name="side_unknown">Lado não reconhecido</string>
+    <string name="diaper_wet">Xixi</string>
+    <string name="diaper_dirty">Cocô</string>
+    <string name="diaper_mixed">Xixi e cocô</string>
+    <string name="diaper_dry">Seca</string>
+    <string name="diaper_unspecified">Não especificado</string>
+    <string name="diaper_unknown">Outro tipo</string>
+    <string name="milk_breast">Leite materno</string>
+    <string name="milk_formula">Fórmula</string>
+    <string name="milk_mixed">Misto</string>
+    <string name="milk_other">Outro</string>
+    <string name="milk_unspecified">Não especificado</string>
+    <string name="milk_unknown">Outro tipo</string>
+
+    <string name="volume_ml">%1$d ml</string>
+    <string name="duration_min">%1$d min</string>
+    <string name="duration_h">%1$d h</string>
+    <string name="duration_h_min">%1$d h %2$02d min</string>
+    <plurals name="spoken_hours">
+        <item quantity="one">%1$d hora</item>
+        <item quantity="other">%1$d horas</item>
+    </plurals>
+    <plurals name="spoken_minutes">
+        <item quantity="one">%1$d minuto</item>
+        <item quantity="other">%1$d minutos</item>
+    </plurals>
+    <string name="spoken_h_and_min">%1$s e %2$s</string>
+    <string name="duration_less_than_minute">menos de 1 minuto</string>
+
+    <!-- Formulários -->
+    <string name="form_title_new_sleep">Registrar sono passado</string>
+    <string name="form_title_edit_sleep">Editar sono</string>
+    <string name="form_title_new_breast">Registrar mamada</string>
+    <string name="form_title_edit_breast">Editar mamada</string>
+    <string name="form_title_new_bottle">Registrar mamadeira</string>
+    <string name="form_title_edit_bottle">Editar mamadeira</string>
+    <string name="form_title_new_pumping">Registrar extração</string>
+    <string name="form_title_edit_pumping">Editar extração</string>
+    <string name="form_title_new_diaper">Registrar fralda</string>
+    <string name="form_title_edit_diaper">Editar fralda</string>
+    <string name="field_start">Início</string>
+    <string name="field_end">Fim</string>
+    <string name="field_time">Horário</string>
+    <string name="field_duration">Duração</string>
+    <string name="field_side">Lado</string>
+    <string name="field_volume">Volume (ml)</string>
+    <string name="field_volume_optional">Volume (ml, opcional)</string>
+    <string name="field_milk_type">Tipo de leite (opcional)</string>
+    <string name="field_milk_none">Não informar</string>
+    <string name="field_diaper_type">Tipo</string>
+    <string name="field_sleep_type">Tipo de sono</string>
+    <string name="field_method">Local ou método (opcional)</string>
+    <string name="field_notes">Observação (opcional)</string>
+    <string name="field_ongoing">Ainda dormindo (em andamento)</string>
+    <string name="field_time_button">%1$s: %2$s. Toque para alterar.</string>
+    <string name="field_shortcuts">Foi antes?</string>
+    <string name="form_save">Salvar</string>
+    <string name="form_saving">Salvando</string>
+    <string name="form_delete">Excluir registro</string>
+    <string name="delete_confirm_title">Excluir este registro?</string>
+    <string name="delete_confirm_body">O registro será removido deste aparelho e, depois da sincronização, dos outros aparelhos.</string>
+    <string name="delete_confirm_yes">Excluir</string>
+    <string name="form_not_found">Este registro não existe mais.</string>
+    <string name="form_read_only">Você tem acesso somente de leitura; não é possível salvar alterações.</string>
+    <string name="duration_decrease_1">Diminuir 1 minuto</string>
+    <string name="duration_increase_1">Aumentar 1 minuto</string>
+    <string name="duration_decrease_5">Diminuir 5 minutos</string>
+    <string name="duration_increase_5">Aumentar 5 minutos</string>
+    <string name="volume_decrease">Diminuir 10 ml</string>
+    <string name="volume_increase">Aumentar 10 ml</string>
+    <string name="volume_stepper_label">Volume: %1$d ml</string>
+    <string name="duration_stepper_label">Duração: %1$d min</string>
+
+    <string name="issue_required">Campo obrigatório.</string>
+    <string name="issue_end_before_start">O fim precisa ser depois do início.</string>
+    <string name="issue_future">Esse horário está no futuro.</string>
+    <string name="issue_too_long_session">A duração é maior do que o permitido.</string>
+    <string name="issue_volume">Informe um volume de 1 a %1$d ml.</string>
+    <string name="issue_text_too_long">Texto longo demais (máximo %1$d caracteres).</string>
+    <string name="issue_side_required">Escolha o lado.</string>
+    <string name="issue_diaper_required">Escolha o tipo.</string>
+    <string name="issue_invalid">Valor inválido.</string>
+    <string name="warn_sleep_overlap">Este horário se sobrepõe a outro registro de sono. Você pode salvar mesmo assim; os dois ficam registrados.</string>
+
+    <!-- Despertares -->
+    <string name="wake_title">Despertares</string>
+    <string name="wake_none">Nenhum despertar registrado.</string>
+    <string name="wake_add">Adicionar despertar</string>
+    <string name="wake_item">%1$s – %2$s · %3$s</string>
+    <string name="wake_remove">Remover despertar</string>
+    <plurals name="wake_night_awakenings">
+        <item quantity="one">%1$d despertar noturno</item>
+        <item quantity="other">%1$d despertares noturnos</item>
+    </plurals>
+    <string name="wake_insufficient">Sem dados suficientes para contar despertares.</string>
+    <string name="wake_add_title">Novo despertar</string>
+    <string name="wake_start">Hora do despertar</string>
+    <string name="wake_duration">Duração: %1$d min</string>
+
+    <!-- Seletores -->
+    <string name="picker_ok">OK</string>
+    <string name="picker_cancel">Cancelar</string>
+    <string name="picker_date_title">Escolha a data</string>
+    <string name="picker_time_title">Escolha a hora</string>
+</resources>

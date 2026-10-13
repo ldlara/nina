@@ -17,16 +17,21 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: api
-          image: REGISTRY/nina-api:TAG  # placeholder: definir registry (ADR-0006)
-          imagePullPolicy: IfNotPresent
+          image: REGISTRY/nina-api@sha256:DIGEST  # placeholder: registry (ADR-0006); implantar por digest (SR-017)
+          imagePullPolicy: Always
           ports:
             - { name: http, containerPort: 8080 }
           envFrom:
             - configMapRef: { name: nina-config }
           env:
+            # Segredo compartilhado BFF<->API (>= 32 caracteres). Sem ele nenhum dos dois sobe em Production (NR-02).
+            - name: Internal__SharedSecret
+              valueFrom:
+                secretKeyRef: { name: nina-internal, key: Internal__SharedSecret }
+            # Login do papel nina_app (sujeito a RLS). Nunca o dono/superusuário (SR-018).
             - name: ConnectionStrings__Default
               valueFrom:
-                secretKeyRef: { name: nina-secrets, key: ConnectionStrings__Default }
+                secretKeyRef: { name: nina-db-app, key: ConnectionStrings__Default }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

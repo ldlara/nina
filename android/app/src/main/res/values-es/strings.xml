@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="common_back">Atrás</string>
+    <string name="common_cancel">Cancelar</string>
+    <string name="common_confirm">Confirmar</string>
+    <string name="common_retry">Intentar de nuevo</string>
+    <string name="common_loading">Cargando</string>
+    <string name="common_or">o</string>
+    <string name="common_you">(tú)</string>
+
+    <string name="onboarding_title_1">Una línea del tiempo solo de tu bebé</string>
+    <string name="onboarding_body_1">Sueño, alimentación y pañales en un solo lugar, fácil de registrar a las tres de la madrugada.</string>
+    <string name="onboarding_title_2">Cuidadores en equipo</string>
+    <string name="onboarding_body_2">Invita a tu familia y da a cada persona el rol adecuado: registrar o solo acompañar.</string>
+    <string name="onboarding_title_3">Orientación, no diagnóstico</string>
+    <string name="onboarding_body_3">Las sugerencias de Nina ayudan con la rutina y no sustituyen la evaluación de un profesional de la salud.</string>
+    <string name="onboarding_next">Siguiente</string>
+    <string name="onboarding_skip">Omitir</string>
+    <string name="onboarding_start">Empezar</string>
+    <string name="onboarding_have_account">Ya tengo cuenta</string>
+    <string name="onboarding_page_indicator">Página %1$d de %2$d</string>
+
+    <string name="auth_title_register">Crear cuenta</string>
+    <string name="auth_title_login">Iniciar sesión</string>
+    <string name="auth_email">Correo electrónico</string>
+    <string name="auth_password">Contraseña</string>
+    <string name="auth_password_help">Usa una contraseña larga que no uses en otros sitios.</string>
+    <string name="auth_display_name">Tu nombre (opcional)</string>
+    <string name="auth_show_password">Mostrar contraseña</string>
+    <string name="auth_hide_password">Ocultar contraseña</string>
+    <string name="auth_accept_terms">He leído y acepto los Términos de Uso y la Política de Privacidad (versión %1$s) — obligatorio</string>
+    <string name="auth_accept_terms_required">Aceptar los Términos y la Política es obligatorio para crear la cuenta.</string>
+    <string name="auth_optional_consents">Opcionales (puedes cambiarlo después)</string>
+    <string name="auth_consent_analytics">Ayudar a mejorar Nina con estadísticas de uso, sin datos que identifiquen a tu bebé</string>
+    <string name="auth_consent_marketing">Recibir novedades y consejos por correo electrónico</string>
+    <string name="auth_submit_register">Crear cuenta</string>
+    <string name="auth_submit_login">Iniciar sesión</string>
+    <string name="auth_switch_to_login">Ya tengo cuenta. Iniciar sesión</string>
+    <string name="auth_switch_to_register">No tengo cuenta. Crear una</string>
+    <string name="auth_google">Continuar con Google</string>
+    <string name="auth_apple">Continuar con Apple</string>
+    <string name="auth_social_unavailable">Este método de acceso aún no está disponible en esta versión de la app.</string>
+    <string name="auth_legal_loading">Cargando las versiones de los documentos…</string>
+    <string name="auth_legal_unavailable">No se pudieron cargar las versiones de los Términos y la Política.</string>
+
+    <string name="verify_title">Confirma tu correo</string>
+    <string name="verify_body">Enviamos un código a %1$s. Escríbelo abajo para activar tu cuenta.</string>
+    <string name="verify_code">Código de confirmación</string>
+    <string name="verify_submit">Confirmar correo</string>
+    <string name="verify_resend">Reenviar código</string>
+    <string name="verify_resend_in">Reenviar en %1$d s</string>
+    <string name="verify_resent">Si el correo es válido, se envió un nuevo código.</string>
+
+    <string name="babies_title">Tus bebés</string>
+    <string name="babies_empty_title">Aún no hay bebés</string>
+    <string name="babies_empty_body">Crea el perfil de tu bebé para empezar, o acepta una invitación que recibiste.</string>
+    <string name="babies_add">Añadir bebé</string>
+    <string name="babies_accept_invite">Tengo una invitación</string>
+    <string name="babies_caregivers">Cuidadores</string>
+    <string name="babies_open_profile">Ver perfil</string>
+    <string name="babies_logout">Cerrar sesión</string>
+    <string name="babies_offline_cached">Sin conexión. Mostrando los datos guardados en este dispositivo.</string>
+    <string name="babies_item_description">%1$s, %2$s, tu rol: %3$s</string>
+
+    <string name="baby_form_title_create">Cuéntanos sobre tu bebé</string>
+    <string name="baby_form_title_edit">Perfil del bebé</string>
+    <string name="baby_name">¿Cómo podemos llamarlo/a?</string>
+    <string name="baby_birth_date">Fecha de nacimiento</string>
+    <string name="baby_due_date">Fecha prevista del parto (opcional)</string>
+    <string name="baby_due_date_help">Ayuda a ajustar la agenda si el bebé nació antes de lo previsto.</string>
+    <string name="baby_date_not_set">Sin informar</string>
+    <string name="baby_clear_due_date">Quitar fecha prevista</string>
+    <string name="baby_sex">Sexo (opcional)</string>
+    <string name="baby_timezone">Zona horaria</string>
+    <string name="baby_guardian_consent">Declaro ser el representante legal de este bebé y autorizo el tratamiento de sus datos según la Política de Privacidad.</string>
+    <string name="baby_guardian_consent_required">La declaración de representante legal es obligatoria.</string>
+    <string name="baby_save_create">Continuar</string>
+    <string name="baby_save_edit">Guardar cambios</string>
+    <string name="baby_saved">Perfil guardado.</string>
+    <string name="baby_read_only_notice">Solo el titular puede editar el perfil del bebé.</string>
+    <string name="baby_date_picker_confirm">Aceptar</string>
+    <string name="baby_corrected_window_hint">La edad corregida se aplica hasta los %1$d meses de edad.</string>
+
+    <string name="sex_female">Femenino</string>
+    <string name="sex_male">Masculino</string>
+    <string name="sex_other">Otro</string>
+    <string name="sex_unspecified">Prefiero no decirlo</string>
+
+    <string name="age_section_title">Edad</string>
+    <string name="age_chronological">Edad cronológica: %1$s</string>
+    <string name="age_corrected">Edad corregida: %1$s</string>
+    <string name="age_corrected_not_applicable">Edad corregida: no aplica</string>
+    <string name="age_source_note">Calculada por el servidor a partir de las fechas informadas.</string>
+    <string name="age_as_of">Actualizada el %1$s.</string>
+    <plurals name="age_days">
+        <item quantity="one">%1$d día</item>
+        <item quantity="many">%1$d días</item>
+        <item quantity="other">%1$d días</item>
+    </plurals>
+    <plurals name="age_weeks">
+        <item quantity="one">%1$d semana</item>
+        <item quantity="many">%1$d semanas</item>
+        <item quantity="other">%1$d semanas</item>
+    </plurals>
+    <string name="age_days_and_weeks">%1$s (%2$s)</string>
+
+    <string name="role_owner">Titular</string>
+    <string name="role_caregiver">Cuidador/a</string>
+    <string name="role_read_only">Solo lectura</string>
+    <string name="role_unknown">Otro</string>
+    <string name="role_caregiver_description">Registra y edita los eventos del bebé.</string>
+    <string name="role_read_only_description">Solo acompaña; no registra ni edita.</string>
+    <string name="status_active">Activo</string>
+    <string name="status_pending">Invitación pendiente</string>
+    <string name="status_revoked">Eliminado</string>
+    <string name="status_declined">Invitación rechazada</string>
+    <string name="status_expired">Invitación vencida</string>
+    <string name="status_unknown">Otro estado</string>
+
+    <string name="caregivers_title">Cuidadores</string>
+    <string name="caregivers_invite">Invitar cuidador</string>
+    <string name="caregivers_owner_only_note">Solo el titular puede invitar y quitar personas.</string>
+    <string name="caregivers_invitee_unknown">Persona invitada</string>
+    <string name="caregivers_pending_expires">La invitación vence el %1$s</string>
+    <string name="caregivers_item_description">%1$s, %2$s, %3$s</string>
+    <string name="caregivers_resend">Reenviar invitación</string>
+    <string name="caregivers_resent">Invitación reenviada.</string>
+    <string name="caregivers_cancel_invite">Cancelar invitación</string>
+    <string name="caregivers_remove">Quitar acceso</string>
+    <string name="caregivers_leave">Salir de este bebé</string>
+    <string name="caregivers_change_role">Cambiar rol</string>
+    <string name="caregivers_remove_title">¿Quitar a %1$s?</string>
+    <string name="caregivers_remove_body">%1$s perderá el acceso de inmediato. Los registros que hizo permanecen en el historial del bebé.</string>
+    <string name="caregivers_cancel_invite_title">¿Cancelar invitación?</string>
+    <string name="caregivers_cancel_invite_body">La invitación para %1$s dejará de funcionar.</string>
+    <string name="caregivers_leave_title">¿Salir de este bebé?</string>
+    <string name="caregivers_leave_body">Perderás el acceso a este bebé. Los datos que creaste permanecen para los demás cuidadores.</string>
+    <string name="caregivers_removed">Acceso eliminado.</string>
+    <string name="caregivers_role_changed">Rol actualizado.</string>
+    <string name="invite_title">Invitar cuidador</string>
+    <string name="invite_email">Correo de la persona</string>
+    <string name="invite_role">Rol</string>
+    <string name="invite_send">Enviar invitación</string>
+    <string name="invite_sent">Invitación enviada.</string>
+
+    <string name="accept_title">Tengo una invitación</string>
+    <string name="accept_token_label">Código o enlace de la invitación</string>
+    <string name="accept_token_help">Pega aquí el código o el enlace recibido por correo.</string>
+    <string name="accept_check">Ver invitación</string>
+    <string name="accept_preview">%1$s te invitó a acompañar a %2$s.</string>
+    <string name="accept_preview_role">Tu rol: %1$s</string>
+    <string name="accept_preview_expires">Válida hasta el %1$s</string>
+    <string name="accept_accept">Aceptar invitación</string>
+    <string name="accept_decline">Rechazar</string>
+    <string name="accept_done">Invitación aceptada.</string>
+    <string name="accept_declined">Invitación rechazada.</string>
+
+    <string name="error_prefix">Error: %1$s</string>
+    <string name="error_network">Sin conexión. Revisa tu internet e inténtalo de nuevo.</string>
+    <string name="error_generic">Algo salió mal. Inténtalo de nuevo.</string>
+    <string name="error_invalid_credentials">Correo o contraseña incorrectos.</string>
+    <string name="error_session_expired">Tu sesión venció. Inicia sesión de nuevo.</string>
+    <string name="error_validation">Revisa los campos resaltados.</string>
+    <string name="error_forbidden_role">No tienes permiso para hacer esto.</string>
+    <string name="error_access_revoked">Ya no tienes acceso a este bebé.</string>
+    <string name="error_consent_required">Debes aceptar los términos para continuar.</string>
+    <string name="error_not_found">No encontramos lo que buscabas.</string>
+    <string name="error_identity_link_required">Este correo ya usa otro método de acceso. Entra con el método original; podrás vincular los métodos después.</string>
+    <string name="error_already_member">Esta persona ya tiene acceso a este bebé.</string>
+    <string name="error_rate_limited">Demasiados intentos. Espera un momento e inténtalo de nuevo.</string>
+    <string name="error_version_conflict">Otra persona modificó este perfil. Recargamos los datos; revisa y guarda de nuevo.</string>
+    <string name="error_upgrade_required">Actualiza Nina para continuar.</string>
+    <string name="error_server">El servicio no está disponible por ahora. Inténtalo más tarde.</string>
+    <string name="error_owner_required">El bebé siempre debe tener un titular.</string>
+    <string name="error_code_invalid">Código inválido o vencido.</string>
+    <string name="error_idempotency">Esta solicitud ya se envió con otros datos. Inténtalo de nuevo.</string>
+
+    <string name="field_required">Campo obligatorio.</string>
+    <string name="field_invalid">Valor inválido.</string>
+    <string name="field_email_invalid">Escribe un correo válido.</string>
+    <string name="field_future_date">La fecha no puede estar en el futuro.</string>
+    <string name="field_password_policy">La contraseña no cumple la política de seguridad.</string>
+    <string name="field_name_too_long">Usa como máximo %1$d caracteres.</string>
+</resources>

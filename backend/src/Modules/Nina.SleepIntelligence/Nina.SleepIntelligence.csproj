@@ -2,4 +2,11 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Data\sleep-reference-table.json" LogicalName="Nina.SleepIntelligence.Data.sleep-reference-table.json" />
+    <EmbeddedResource Include="Data\messages.pt-BR.json" WithCulture="false" LogicalName="Nina.SleepIntelligence.Data.messages.pt-BR.json" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Nina.SleepIntelligence.Tests" />
+  </ItemGroup>
 </Project>

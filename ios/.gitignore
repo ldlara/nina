@@ -1,0 +1,9 @@
+Nina.xcodeproj/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+DerivedData/
+.build/
+.swiftpm/
+*.xcuserstate
+App/Nina/Info.plist
+App/Nina/Nina.entitlements
