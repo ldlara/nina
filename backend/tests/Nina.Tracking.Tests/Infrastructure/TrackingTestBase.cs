@@ -57,9 +57,9 @@ public abstract class TrackingTestBase(PostgresFixture postgres) : IAsyncLifetim
         var baby = Guid.NewGuid();
         await AdminExecAsync(
             $"""
-            INSERT INTO nina.family (id, owner_user_id) VALUES ('{family}', '{owner.UserId}');
+            INSERT INTO nina.family (id, owner_user_id) VALUES ('{family}', '{owner.UserId}') ON CONFLICT (owner_user_id) DO NOTHING;
             INSERT INTO nina.baby (id, family_id, display_name, birth_date, due_date, timezone, created_by, last_modified_by)
-              VALUES ('{baby}', '{family}', '{name}', current_date - 100, current_date - 90, '{timezone}', '{owner.UserId}', '{owner.UserId}');
+              VALUES ('{baby}', (SELECT id FROM nina.family WHERE owner_user_id = '{owner.UserId}'), '{name}', current_date - 100, current_date - 90, '{timezone}', '{owner.UserId}', '{owner.UserId}');
             INSERT INTO nina.caregiver_membership (baby_id, user_id, role, status, accepted_at)
               VALUES ('{baby}', '{owner.UserId}', 'OWNER', 'ACTIVE', now());
             """);
