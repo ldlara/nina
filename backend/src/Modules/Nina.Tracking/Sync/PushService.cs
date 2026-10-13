@@ -77,7 +77,7 @@ internal sealed partial class PushService(
         if (used.Any(u => u.Count >= limit))
         {
             var retryAfter = await tx.ScalarAsync<double>(
-                "SELECT extract(epoch FROM ((date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC') - now())");
+                "SELECT extract(epoch FROM ((date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC') - now())::double precision");
             throw new ProblemException(StatusCodes.Status429TooManyRequests, "QUOTA_EXCEEDED", "Daily quota exceeded")
             {
                 RetryAfterSeconds = Math.Max(1, (int)Math.Ceiling(retryAfter)),

@@ -52,7 +52,7 @@ internal sealed class ReadService(NpgsqlDataSource dataSource, SignedToken token
         // Sessões em aberto primeiro (rank 0), depois as encerradas e a fralda (rank 1), cada grupo por (instante, id) decrescente.
         if (q.IncludeOpen && (token is null || token.Rank == 0))
         {
-            var open = await FetchAsync(tx, babyId, specs.Where(s => s.EndField is not null), q, openOnly: true, token?.Rank == 0 ? token : null, q.Limit + 1);
+            var open = await FetchAsync(tx, babyId, specs.Where(s => s.Type == EntityCatalog.SleepSession), q, openOnly: true, token?.Rank == 0 ? token : null, q.Limit + 1);
             rows.AddRange(open.Select(x => (0, x.At, x.Id, x.Spec, x.Row)));
         }
 
@@ -97,7 +97,8 @@ internal sealed class ReadService(NpgsqlDataSource dataSource, SignedToken token
             var time = TimeColumn(spec);
             var filters = new List<string> { "t.baby_id = @baby", "t.deleted_at IS NULL" };
             var parameters = new List<NpgsqlParameter> { Db.Uuid("baby", babyId), Db.P("need", need, NpgsqlDbType.Integer) };
-            if (spec.EndField is not null)
+            // Só o sono pode estar "em andamento" (timer); mamadeira/sólido/outro sem fim são registros pontuais.
+            if (spec.Type == EntityCatalog.SleepSession)
             {
                 filters.Add(openOnly ? $"t.{spec.EndField} IS NULL" : $"t.{spec.EndField} IS NOT NULL");
             }
