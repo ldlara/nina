@@ -1,15 +1,26 @@
 # Build multi-stage de produção. Uso: --build-arg PROJECT=Nina.Api (ou Nina.Bff)
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+# Imagens fixadas por digest (SR-017); atualize tag+digest juntos (Dependabot/Renovate docker ou revisão manual).
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:e70cdb7f80b0348f5cb85f19a8f670fca061f033d57eed12fa003d58b0e06317 AS build
 ARG PROJECT
 WORKDIR /src
 COPY backend/ ./backend/
 RUN dotnet publish backend/src/${PROJECT}/${PROJECT}.csproj -c Release -o /out
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4 AS runtime
 ARG PROJECT
-ENV ASPNETCORE_URLS=http://+:8080 PROJECT_DLL=${PROJECT}.dll
+# DOTNET_EnableDiagnostics=0: sem sockets IPC de diagnóstico em /tmp (compatível com FS somente leitura).
+ENV ASPNETCORE_URLS=http://+:8080 \
+    PROJECT_DLL=${PROJECT}.dll \
+    DOTNET_EnableDiagnostics=0 \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1
 WORKDIR /app
 COPY --from=build /out .
-USER $APP_UID
+# UID numérico explícito (não depende de APP_UID da imagem base); GID 0 para compatibilidade com UID arbitrário do OpenShift.
+USER 1654:0
 EXPOSE 8080
-ENTRYPOINT ["sh", "-c", "dotnet $PROJECT_DLL"]
+# Sem curl na imagem: sonda HTTP via bash /dev/tcp. O orquestrador (OpenShift) usa suas próprias probes.
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
+  CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]
+# 'exec' faz o dotnet ser o PID 1 (recebe SIGTERM -> desligamento gracioso). Exec form do sh; o DLL vem do ENV acima.
+ENTRYPOINT ["sh", "-c", "exec dotnet \"$PROJECT_DLL\""]
+# Execução endurecida (compose/OpenShift): --read-only com tmpfs em /tmp, --cap-drop=ALL, no-new-privileges.

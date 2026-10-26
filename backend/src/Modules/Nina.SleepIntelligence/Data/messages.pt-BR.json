@@ -1,0 +1,16 @@
+{
+  "_header": "Textos de referência pt-BR das chaves de mensagem do motor de sono. Os clientes localizam as chaves (PT/EN/ES); este arquivo serve ao servidor (e-mails, push) e ao verificador de linguagem (RNF-014). RASCUNHO — revisar com UX, jurídico e especialista.",
+  "messages": {
+    "prediction.estimate_not_diagnosis": "As estimativas do Nina são orientativas, baseadas na idade e nos registros que você fez. Não substituem a avaliação de um profissional de saúde e não são diagnóstico.",
+    "prediction.explain.age_only": "Ainda estamos usando valores típicos para a idade ({age_months} meses). Com mais registros, a agenda se ajusta ao seu bebê.",
+    "prediction.explain.history_and_age": "Baseado na idade ({age_months} meses) e nos últimos {days_used} dias de registros ({records_used} registros). O bebê costuma ficar acordado cerca de {typical_wake_minutes} min entre sonecas.",
+    "prediction.explain.irregular_history": "Os registros recentes variam bastante, então a estimativa é mais ampla. Baseado na idade ({age_months} meses) e em {records_used} registros.",
+    "prediction.explain.bedtime_age_only": "Ainda estamos usando valores típicos para a idade ({age_months} meses). Com mais noites registradas, o horário se ajusta ao seu bebê.",
+    "prediction.explain.bedtime_history_and_age": "Baseado na idade ({age_months} meses) e nas últimas noites registradas ({records_used} noites). O bebê costuma ir dormir por volta de {typical_bedtime_local}.",
+    "prediction.explain.bedtime_preference": "Considerando a faixa de horário que você escolheu e a idade ({age_months} meses). É uma estimativa dentro da sua preferência.",
+    "prediction.explain.age_out_of_range": "Ainda não temos valores típicos para esta idade, por isso não mostramos uma estimativa.",
+    "prediction.explain.timezone_unknown": "Não foi possível identificar o fuso horário do perfil, por isso não mostramos uma estimativa.",
+    "prediction.explain.nap_target_reached": "Pela meta de sonecas que você definiu, não há outra soneca prevista hoje.",
+    "prediction.explain.sleeping_now": "O bebê está dormindo agora; mostramos o sono em andamento em vez de uma estimativa."
+  }
+}

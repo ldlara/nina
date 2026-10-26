@@ -6,3 +6,6 @@ metadata:
 data:
   ASPNETCORE_ENVIRONMENT: Production
   Api__BaseUrl: http://nina-api:8080
+  # NR-02: CIDR do roteador/ingress do OpenShift que o BFF deve considerar confiável para X-Forwarded-For.
+  # TODO(ADR-0006): preencher com o CIDR real do ambiente; sem isso o BFF só confia em loopback e todos os clientes compartilham o IP do roteador.
+  ForwardedHeaders__KnownNetworks__0: "0.0.0.0/32"

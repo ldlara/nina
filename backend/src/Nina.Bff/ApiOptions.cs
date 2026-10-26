@@ -8,3 +8,13 @@ public sealed class ApiOptions
 
     public int TimeoutSeconds { get; set; } = 10;
 }
+
+/// <summary>Segredo compartilhado BFF -> API (<c>Internal:SharedSecret</c>); obrigatório fora de Development.</summary>
+public sealed class InternalOptions
+{
+    public const string SectionName = "Internal";
+
+    public const int MinSecretLength = 32;
+
+    public string? SharedSecret { get; set; }
+}

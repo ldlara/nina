@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="nina_window_background">#12141C</color>
+    <color name="nina_icon_background">#242938</color>
+    <color name="nina_icon_foreground">#9DB4F0</color>
+</resources>

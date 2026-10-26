@@ -1,4 +1,15 @@
 **/bin
 **/obj
 .git
+.github
 .env
+.env.*
+!.env.example
+**/*.user
+**/.vs
+**/TestResults
+android
+ios
+docs
+specs
+contracts

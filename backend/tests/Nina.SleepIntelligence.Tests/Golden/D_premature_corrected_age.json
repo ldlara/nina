@@ -1,0 +1,339 @@
+{
+  "name": "D_premature_corrected_age",
+  "description": "Idade corrigida de 90 dias define a faixa (cronol\u00F3gica seria 150).",
+  "as_of": "2026-10-08T10:01:00.0000000\u002B00:00",
+  "request": {
+    "Baby": {
+      "BirthDate": "2026-05-11",
+      "DueDate": "2026-07-10",
+      "TimeZoneId": "America/Sao_Paulo"
+    },
+    "History": [
+      {
+        "Id": "00000000-0000-0000-0000-000000000001",
+        "StartAt": "2026-10-01T10:51:00\u002B00:00",
+        "EndAt": "2026-10-01T11:34:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000002",
+        "StartAt": "2026-10-01T12:56:00\u002B00:00",
+        "EndAt": "2026-10-01T13:42:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000003",
+        "StartAt": "2026-10-01T15:03:00\u002B00:00",
+        "EndAt": "2026-10-01T15:51:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000004",
+        "StartAt": "2026-10-01T17:08:00\u002B00:00",
+        "EndAt": "2026-10-01T17:56:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000005",
+        "StartAt": "2026-10-01T23:28:00\u002B00:00",
+        "EndAt": "2026-10-02T09:33:00\u002B00:00",
+        "Kind": "Night",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000006",
+        "StartAt": "2026-10-02T10:56:00\u002B00:00",
+        "EndAt": "2026-10-02T11:40:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000007",
+        "StartAt": "2026-10-02T13:01:00\u002B00:00",
+        "EndAt": "2026-10-02T13:48:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000008",
+        "StartAt": "2026-10-02T15:07:00\u002B00:00",
+        "EndAt": "2026-10-02T15:53:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000009",
+        "StartAt": "2026-10-02T17:13:00\u002B00:00",
+        "EndAt": "2026-10-02T17:59:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000010",
+        "StartAt": "2026-10-02T23:32:00\u002B00:00",
+        "EndAt": "2026-10-03T09:30:00\u002B00:00",
+        "Kind": "Night",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000011",
+        "StartAt": "2026-10-03T10:53:00\u002B00:00",
+        "EndAt": "2026-10-03T11:36:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000012",
+        "StartAt": "2026-10-03T12:54:00\u002B00:00",
+        "EndAt": "2026-10-03T13:38:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000013",
+        "StartAt": "2026-10-03T14:57:00\u002B00:00",
+        "EndAt": "2026-10-03T15:40:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000014",
+        "StartAt": "2026-10-03T16:57:00\u002B00:00",
+        "EndAt": "2026-10-03T17:39:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000015",
+        "StartAt": "2026-10-03T23:30:00\u002B00:00",
+        "EndAt": "2026-10-04T09:29:00\u002B00:00",
+        "Kind": "Night",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000016",
+        "StartAt": "2026-10-04T10:52:00\u002B00:00",
+        "EndAt": "2026-10-04T11:39:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000017",
+        "StartAt": "2026-10-04T12:56:00\u002B00:00",
+        "EndAt": "2026-10-04T13:42:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000018",
+        "StartAt": "2026-10-04T15:00:00\u002B00:00",
+        "EndAt": "2026-10-04T15:46:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000019",
+        "StartAt": "2026-10-04T17:07:00\u002B00:00",
+        "EndAt": "2026-10-04T17:52:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000020",
+        "StartAt": "2026-10-04T23:29:00\u002B00:00",
+        "EndAt": "2026-10-05T09:31:00\u002B00:00",
+        "Kind": "Night",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000021",
+        "StartAt": "2026-10-05T10:54:00\u002B00:00",
+        "EndAt": "2026-10-05T11:37:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000022",
+        "StartAt": "2026-10-05T13:00:00\u002B00:00",
+        "EndAt": "2026-10-05T13:48:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000023",
+        "StartAt": "2026-10-05T15:09:00\u002B00:00",
+        "EndAt": "2026-10-05T15:56:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000024",
+        "StartAt": "2026-10-05T17:18:00\u002B00:00",
+        "EndAt": "2026-10-05T18:04:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000025",
+        "StartAt": "2026-10-05T23:31:00\u002B00:00",
+        "EndAt": "2026-10-06T09:29:00\u002B00:00",
+        "Kind": "Night",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000026",
+        "StartAt": "2026-10-06T10:51:00\u002B00:00",
+        "EndAt": "2026-10-06T11:34:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000027",
+        "StartAt": "2026-10-06T12:56:00\u002B00:00",
+        "EndAt": "2026-10-06T13:38:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000028",
+        "StartAt": "2026-10-06T15:00:00\u002B00:00",
+        "EndAt": "2026-10-06T15:42:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000029",
+        "StartAt": "2026-10-06T17:05:00\u002B00:00",
+        "EndAt": "2026-10-06T17:50:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000030",
+        "StartAt": "2026-10-06T23:28:00\u002B00:00",
+        "EndAt": "2026-10-07T09:29:00\u002B00:00",
+        "Kind": "Night",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000031",
+        "StartAt": "2026-10-07T10:52:00\u002B00:00",
+        "EndAt": "2026-10-07T11:40:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000032",
+        "StartAt": "2026-10-07T13:00:00\u002B00:00",
+        "EndAt": "2026-10-07T13:48:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000033",
+        "StartAt": "2026-10-07T15:05:00\u002B00:00",
+        "EndAt": "2026-10-07T15:47:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000034",
+        "StartAt": "2026-10-07T17:05:00\u002B00:00",
+        "EndAt": "2026-10-07T17:53:00\u002B00:00",
+        "Kind": "Nap",
+        "TimeZoneId": "America/Sao_Paulo"
+      },
+      {
+        "Id": "00000000-0000-0000-0000-000000000035",
+        "StartAt": "2026-10-07T23:30:00\u002B00:00",
+        "EndAt": "2026-10-08T09:31:00\u002B00:00",
+        "Kind": "Night",
+        "TimeZoneId": "America/Sao_Paulo"
+      }
+    ],
+    "Preferences": null
+  },
+  "expected": {
+    "Status": "Available",
+    "DisclaimerKey": "prediction.estimate_not_diagnosis",
+    "Predictions": [
+      {
+        "Kind": "NextNap",
+        "PredictedStart": "2026-10-08T10:46:00\u002B00:00",
+        "PredictedEnd": "2026-10-08T11:00:00\u002B00:00",
+        "Confidence": "High",
+        "ConfidenceScore": 100,
+        "Explanation": {
+          "Key": "prediction.explain.history_and_age",
+          "Params": {
+            "age_basis": "CORRECTED",
+            "age_months": 2,
+            "anchor_assumed": false,
+            "days_used": 7,
+            "records_used": 35,
+            "typical_wake_minutes": 82
+          }
+        },
+        "BaselineOnly": false
+      },
+      {
+        "Kind": "Bedtime",
+        "PredictedStart": "2026-10-08T22:59:00\u002B00:00",
+        "PredictedEnd": "2026-10-08T23:51:00\u002B00:00",
+        "Confidence": "Medium",
+        "ConfidenceScore": 78,
+        "Explanation": {
+          "Key": "prediction.explain.bedtime_history_and_age",
+          "Params": {
+            "age_basis": "CORRECTED",
+            "age_months": 2,
+            "days_used": 7,
+            "naps_today": 0,
+            "records_used": 7,
+            "typical_bedtime_local": "20:25"
+          }
+        },
+        "BaselineOnly": false
+      }
+    ],
+    "StatusExplanation": null,
+    "ModelVersion": "rules-2026.10.1",
+    "ReferenceTableVersion": "0.1.0-draft",
+    "ReferenceTableHash": "31dbf0563eedae32",
+    "ReferenceTableIsDraft": true,
+    "ComputedAt": "2026-10-08T10:01:00\u002B00:00",
+    "InputsFingerprint": "49b67844b608831f",
+    "Age": {
+      "ChronologicalDays": 150,
+      "CorrectedDays": 90,
+      "CorrectionApplied": true,
+      "EffectiveDays": 90,
+      "Basis": "CORRECTED"
+    },
+    "Plan": {
+      "ExpectedNapCount": 4,
+      "NapCountSource": "HISTORY",
+      "NapsCompletedToday": 0,
+      "BedtimeRangeFromMinuteOfDay": 1157,
+      "BedtimeRangeToMinuteOfDay": 1307,
+      "PreferencesApplied": false
+    },
+    "DataQuality": {
+      "ValidSessions": 35,
+      "IgnoredInvalid": 0,
+      "IgnoredTooShort": 0,
+      "IgnoredTooLong": 0,
+      "IgnoredFuture": 0,
+      "MergedOverlaps": 0,
+      "OpenSessionIgnored": false,
+      "TimezoneChangedInHistory": false,
+      "WakeWindowObservations": 27,
+      "WakeWindowOutliers": 7,
+      "DaysUsed": 7
+    }
+  }
+}

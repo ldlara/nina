@@ -1,0 +1,14 @@
+<Project>
+  <!-- Spike ARCH-003: isolado do Nina.sln. Não herda backend/Directory.Build.props (MSBuild usa o mais próximo). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <NuGetAudit>false</NuGetAudit>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+</Project>
