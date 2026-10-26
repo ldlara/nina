@@ -89,7 +89,6 @@ public sealed class ConsentTests(PostgresFixture postgres) : IntegrationTestBase
     [InlineData("ANALYTICS_PRODUCT", "GRANTED", "0.1.0", "document_version", "STALE_VERSION")]
     [InlineData("NOT_A_PURPOSE", "GRANTED", "1.0.0", "purpose_key", "UNSUPPORTED_VALUE")]
     [InlineData("ANALYTICS_PRODUCT", "MAYBE", "1.0.0", "status", "UNSUPPORTED_VALUE")]
-    [InlineData("CHILD_DATA_GUARDIAN", "GRANTED", "1.0.0", "baby_id", "REQUIRED")]
     public async Task Record_consent_validates_input(string purpose, string status, string version, string field, string code)
     {
         var s = await Api.RegisterAndVerifyAsync();
@@ -97,6 +96,18 @@ public sealed class ConsentTests(PostgresFixture postgres) : IntegrationTestBase
 
         Assert.Equal(HttpStatusCode.BadRequest, response.Status);
         Assert.Equal(code, response.FieldErrorCode(field));
+    }
+
+    [Fact]
+    public async Task Guardian_declaration_without_baby_id_is_accepted_so_the_first_baby_can_be_created()
+    {
+        var s = await Api.RegisterAndVerifyAsync();
+
+        var response = await Api.PostAsync("/v1/me/consents", Input("CHILD_DATA_GUARDIAN", "GRANTED"), s.AccessToken);
+
+        Assert.Equal(HttpStatusCode.Created, response.Status);
+        Assert.Equal(1, await AdminScalarAsync<long>(
+            "SELECT count(*) FROM nina.consent_current WHERE purpose_key = 'child_data_guardian' AND subject_baby_id IS NULL AND status = 'GRANTED'"));
     }
 
     [Fact]

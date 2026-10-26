@@ -1,12 +1,12 @@
 # Build multi-stage de produção. Uso: --build-arg PROJECT=Nina.Api (ou Nina.Bff)
 # Imagens fixadas por digest (SR-017); atualize tag+digest juntos (Dependabot/Renovate docker ou revisão manual).
-FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:e70cdb7f80b0348f5cb85f19a8f670fca061f033d57eed12fa003d58b0e06317 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b AS build
 ARG PROJECT
 WORKDIR /src
 COPY backend/ ./backend/
 RUN dotnet publish backend/src/${PROJECT}/${PROJECT}.csproj -c Release -o /out
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:de0ee358cdd672f7017a003bed21e9ac9ed48a27c922a59b18175b6e82fa7fee AS runtime
 ARG PROJECT
 # DOTNET_EnableDiagnostics=0: sem sockets IPC de diagnóstico em /tmp (compatível com FS somente leitura).
 ENV ASPNETCORE_URLS=http://+:8080 \
