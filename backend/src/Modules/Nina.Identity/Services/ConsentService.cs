@@ -135,7 +135,10 @@ public sealed class ConsentService(NinaDb db, IOptions<IdentityOptions> options,
             var purposes = await IdentityStore.ListPurposesAsync(tx);
             var purpose = purposes.FirstOrDefault(p => p.PurposeKey == key)
                           ?? throw ProblemException.Validation(new FieldError("purpose_key", "UNSUPPORTED_VALUE"));
-            if (purpose.Scope == "BABY" != input.BabyId.HasValue)
+            // A declaração de responsável legal precisa existir antes do primeiro bebê (POST /babies exige a consentida):
+            // sem baby_id vale para a conta e cobre qualquer bebê dela; com baby_id fica restrita àquele bebê.
+            var guardianDeclaration = purpose.PurposeKey == "child_data_guardian";
+            if (!guardianDeclaration && purpose.Scope == "BABY" != input.BabyId.HasValue)
             {
                 throw ProblemException.Validation(new FieldError("baby_id", purpose.Scope == "BABY" ? "REQUIRED" : "NOT_APPLICABLE"));
             }
